@@ -38,11 +38,11 @@ Script ini mampu mengambil alih manajemen _headless_ secara keseluruhan tanpa me
    ```bash
    npm install puppeteer
    ```
-4. Buat file `akun.txt` tepat di direktori ini untuk injeksi massal (Format isi data wajib `email:password` per-baris). 
+4. Buat file `akun.txt` tepat di direktori ini untuk injeksi massal (Format isi data biasanya adalah `email:password` atau `email|password` per-baris). 
    *(Contoh isi `akun.txt`:)*
    ```text
    zoro123@email.com:rahasia123
-   sanji.blackleg@domain.com:password456
+   sanji.blackleg@domain.com|password456
    ```
 
 ---
