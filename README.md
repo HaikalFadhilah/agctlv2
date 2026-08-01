@@ -1,6 +1,6 @@
-# AGCTL-v2 (Antigravity Tools Manager)
+# AGCTL-v2 (Antigravity Control)
 
-AGCTL-v2 adalah aplikasi **CLI Otomatisasi (Command-Line Interface)** interaktif yang di-desain khusus untuk memberdayakan dan mengelola akun, proxy, dan kuota untuk aplikasi [Antigravity Manager](https://github.com/lbjlaq/Antigravity-Manager).
+**AGCTL-v2 (Antigravity Control)** adalah aplikasi **CLI Otomatisasi (Command-Line Interface)** interaktif yang di-desain khusus untuk memberdayakan dan mengelola akun, proxy, dan kuota untuk aplikasi [Antigravity Manager](https://github.com/lbjlaq/Antigravity-Manager).
 
 Script ini mampu mengambil alih manajemen _headless_ secara keseluruhan tanpa memicu gangguan Jendela GUI pada sistem operasimu, membuatnya 100% _Ninja mode_/tersembunyi dalam menjalankan pembaruan *state*, OAuth konsent, dan penguraian kendali Proxy layaknya **Daemon**.
 
@@ -55,8 +55,20 @@ Hanya terdapat 1 pintu masuk, eksekusi perintah di bawah ini dari CMD/PowerShell
 node manage.js
 ```
 
-Pilihan menu yang tersedia di antar muka (*CLI*):
+### 💻 Tampilan Interaktif (CLI Menu)
+
+Begitu dijalankan, kamu akan disambut dengan CLI Control Panel keren ala terminal *hacker* seperti di bawah ini, cukup tekan angkanya untuk mengeksekusi kendali!
+
 ```text
+  █████╗  ██████╗  ██████╗████████╗██╗     
+ ██╔══██╗██╔════╝ ██╔════╝╚══██╔══╝██║     
+ ███████║██║  ███╗██║        ██║   ██║     
+ ██╔══██║██║   ██║██║        ██║   ██║     
+ ██║  ██║╚██████╔╝╚██████╗   ██║   ███████╗
+ ╚═╝  ╚═╝ ╚═════╝  ╚═════╝   ╚═╝   ╚══════╝ 
+               ANTIGRAVITY TOOLS MANAGER V2
+──────────────────────────────────────────────
+
   1.  TAMBAH AKUN BARU
   2.  LIST SEMUA AKUN
   3.  HAPUS AKUN
@@ -66,6 +78,8 @@ Pilihan menu yang tersedia di antar muka (*CLI*):
   7.  AUTO DISABLE PROXY 429: [ OFF ]
   8.  REFRESH ALL ACCOUNTS
   0.  KELUAR
+
+  Pilih menu: _
 ```
 
 ### 🔧 Mekanisme Stealth (Anti-Pop Up)
@@ -80,4 +94,4 @@ Script ini menggunakan konfigurasi *OAuth Consent* dari Aplikasi GCP tersendiri 
 Pengaturan tingkat keamanan `Stealth Mode` bisa terdeteksi pada *Windows Defender* khusus fitur VBS-nya karena perilakunya yang nyaris tak kasat mata (seperti *backdoor*). Beri pengecualian *Allowed* (Ignore) apabila terminal CLI-mu ditahan oleh Antivirus *(False Positives)*.
 
 ---
-_AGCTL-v2 - Automate Everything._
+_AGCTL-v2 - Antigravity Control Automate Everything._
