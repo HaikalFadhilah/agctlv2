@@ -1,6 +1,7 @@
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const https = require('https');
 const readline = require('readline');
 const { randomUUID } = require('crypto');
@@ -18,7 +19,9 @@ const SCOPES        = [
     'https://www.googleapis.com/auth/experimentsandconfigs'
 ].join(' ');
 
-const AG_DIR        = path.join(process.env.USERPROFILE, '.antigravity_tools');
+const HOME_DIR      = process.env.USERPROFILE || process.env.HOME || os.homedir();
+const LOCAL_APP_DATA = process.env.LOCALAPPDATA || path.join(HOME_DIR, 'AppData', 'Local');
+const AG_DIR        = process.env.AG_TOOLS_DIR || path.join(HOME_DIR, '.antigravity_tools');
 const ACCOUNTS_DIR  = path.join(AG_DIR, 'accounts');
 const ACCOUNTS_INDEX = path.join(AG_DIR, 'accounts.json');
 
@@ -249,11 +252,17 @@ async function addAccounts() {
             const callbackPort  = await findFreePort(); // Pastikan tiap thread pakai port unik miliknya sendiri
             const redirectUri   = `http://localhost:${callbackPort}/oauth-callback`;
             const AUTH_URL      = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(SCOPES)}&access_type=offline&prompt=consent&include_granted_scopes=true&state=${randomUUID()}`;
+            const systemBrowser = process.env.PUPPETEER_EXECUTABLE_PATH || (
+                process.platform === 'linux'
+                    ? ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome'].find(fs.existsSync)
+                    : undefined
+            );
 
             const callbackPromise = startCallbackServer(callbackPort);
 
             // Headless true dengan config Chrome bot siluman ----------------
             browser = await puppeteer.launch({
+                executablePath: systemBrowser,
                 headless: 'shell',
                 args: [
                     '--no-sandbox',
@@ -907,7 +916,7 @@ async function refreshAllAccounts() {
     console.log(`  SELESAI  ✔ ${sukses} berhasil di-refresh  |  ✘ ${gagal} gagal`);
     logLine();
     
-    if (sukses > 0) {
+    if (sukses > 0 && process.platform === 'win32') {
         logBlank();
         
         try {
@@ -1104,6 +1113,8 @@ async function toggleAutoDisableProxy() {
 
 async function refreshAgManager() {
     const { execSync, spawn } = require('child_process');
+    if (process.platform !== 'win32') return false;
+
     try {
         execSync('taskkill /F /IM antigravity_tools.exe', { encoding: 'utf-8' });
     } catch { /* sudah mati atau tidak bisa di-kill */ }
@@ -1139,7 +1150,7 @@ async function refreshAgManager() {
 }
 
 const GUI_CONFIG     = path.join(AG_DIR, 'gui_config.json');
-const AG_EXE         = path.join(process.env.LOCALAPPDATA, 'Antigravity Tools', 'antigravity_tools.exe');
+const AG_EXE         = path.join(LOCAL_APP_DATA, 'Antigravity Tools', 'antigravity_tools.exe');
 
 function loadGuiConfig() {
     try { return JSON.parse(fs.readFileSync(GUI_CONFIG, 'utf-8')); }
@@ -1175,6 +1186,7 @@ function ensureProxyConfig() {
 }
 
 async function ensureAgRunning() {
+    if (process.platform !== 'win32') return 'unsupported';
     if (isAgRunning()) return 'already';
 
     if (!fs.existsSync(AG_EXE)) {
@@ -1210,6 +1222,11 @@ async function autoStartServices() {
     const { execSync } = require('child_process');
 
     const configChanged = ensureProxyConfig();
+    if (process.platform !== 'win32') {
+        if (configChanged) logOk('Proxy config diupdate (enabled/auto_start).');
+        return;
+    }
+
     const agStatus = await ensureAgRunning();
 
     if (agStatus === 'launched') {
