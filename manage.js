@@ -6,18 +6,20 @@ const { randomUUID } = require('crypto');
 const {
     AG_DIR, ACCOUNTS_DIR, LOCAL_APP_DATA, AG_EXE, IS_WIN,
     getBrowserPath, findPython, isProcessRunning, killProcess, getTempDir,
-    runVbsStealth
+    runVbsStealth, preflightCheck
 } = require('./lib/platform');
 
 const { CLIENT_ID, CLIENT_SECRET, SCOPES, DEVICE_PROFILE } = require('./lib/credentials');
 
 const store = require('./lib/store');
-const { loadIndex, saveIndex, loadAccount, saveAccount, deleteAccountFile,
-        addAccount, removeAccounts, clearAll, countActive, countProxyActive } = store;
+const { loadIndex, saveIndex, saveIndexSync, loadAccount, saveAccount, deleteAccountFile,
+        addAccount, removeAccounts, clearAll, countActive, countProxyActive,
+        findOrphanFiles, cleanupOrphans, backupIndex } = store;
 
 const oauth = require('./lib/oauth');
 const { findFreePort, startCallbackServer, exchangeCodeForTokens,
-        validateToken, refreshAccessToken, decodeJWT, saveAccountToAG, buildAuthUrl } = oauth;
+        validateToken, refreshAccessToken, decodeJWT, saveAccountToAG, buildAuthUrl,
+        classifyTokenError, redactToken, wipeString, BROWSER_TIMEOUT_MS } = oauth;
 
 const monitor = require('./lib/monitor');
 const { createDeleteMonitor, createDisableProxyMonitor } = monitor;
@@ -26,6 +28,9 @@ const ui = require('./lib/ui');
 const { logLine, logInfo, logOk, logWarn, logBlank,
         rl, ask, delay, clear, formatDate, statusBadge, quotaBar,
         printHeader, close } = ui;
+
+const akunParser = require('./lib/akun-parser');
+const quota = require('./lib/quota');
 
 const AUTO429_STATE_FILE = path.join(__dirname, 'auto429.json');
 const AUTO_DISABLE_PROXY_STATE_FILE = path.join(__dirname, 'autodisableproxy.json');
@@ -69,23 +74,30 @@ async function addAccounts() {
     console.log('  TAMBAH AKUN BARU'); logLine(); logBlank();
 
     const filePath = './akun.txt';
-    if (!fs.existsSync(filePath)) {
+    const { entries, lines } = akunParser.parseFile(filePath);
+    if (entries.length === 0 && !fs.existsSync(filePath)) {
         logWarn('File akun.txt tidak ditemukan di folder ini.'); logBlank(); return;
     }
 
-    const rawLines = fs.readFileSync(filePath, 'utf-8')
-        .split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+    const accounts = akunParser.filterAccounts(entries);
+    const invalids = akunParser.filterInvalid(entries);
+    const comments = akunParser.filterComments(entries);
 
-    const accounts = rawLines.map(line => {
-        const parts = line.split(/[:|,]/);
-        return { email: parts[0]?.trim(), password: parts[1]?.trim(), raw: line };
-    });
+    if (invalids.length > 0) {
+        logWarn(`${invalids.length} baris tidak valid:`);
+        invalids.forEach(inv => console.log(`    Baris ${inv.lineNum}: ${inv.error}`));
+        logBlank();
+    }
+    if (comments.length > 0) {
+        logInfo(`${comments.length} baris komentar dilewati.`);
+        logBlank();
+    }
 
-    logInfo(`Ditemukan ${accounts.length} akun di akun.txt`); logBlank();
+    logInfo(`Ditemukan ${accounts.length} akun valid di akun.txt`); logBlank();
     if (accounts.length === 0) return;
 
     let threads = 1;
-    const ans = await ask(`  Berapa worker/task bersamaan yang mau dijalankan? (Max: ${accounts.length}, Default: 1): `);
+    const ans = await ask(`  Berapa worker/task bersamaan? (Max: ${accounts.length}, Default: 1): `);
     const parsed = parseInt(ans.trim(), 10);
     if (!isNaN(parsed) && parsed > 0) threads = Math.min(parsed, accounts.length);
 
@@ -93,8 +105,8 @@ async function addAccounts() {
 
     const successLines = new Set();
     function removeSuccessFromFile() {
-        const remaining = rawLines.filter(l => !successLines.has(l));
-        fs.writeFileSync(filePath, remaining.join('\n') + (remaining.length > 0 ? '\n' : ''), 'utf-8');
+        const newContent = akunParser.removeSuccessEntries(lines, successLines);
+        fs.writeFileSync(filePath, newContent, 'utf-8');
     }
 
     let sukses = 0, gagal = 0, skip = 0;
@@ -104,10 +116,6 @@ async function addAccounts() {
 
     const processAccount = async (account, indexNum) => {
         const logPrefix = `[${String(indexNum).padStart(2)}/${accounts.length}] ${account.email}`;
-
-        if (!account.email || !account.password) {
-            console.log(`  ${logPrefix} ✘ Gagal: Format salah, dilewati.`); gagal++; return;
-        }
 
         const idx = loadIndex();
         if (idx.accounts?.some(a => a.email === account.email)) {
@@ -135,7 +143,7 @@ async function addAccounts() {
             await page.setExtraHTTPHeaders({ 'accept-language': 'en-US,en;q=0.9' });
 
             console.log(`  ${logPrefix} ◆ Membuka Google...`);
-            await page.goto(authUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+            await page.goto(authUrl, { waitUntil: 'networkidle2', timeout: BROWSER_TIMEOUT_MS });
 
             await page.waitForSelector('#identifierId', { visible: true, timeout: 30000 });
             await page.type('#identifierId', account.email, { delay: 0 });
@@ -162,18 +170,16 @@ async function addAccounts() {
                         if (keywords.some(k => text.includes(k))) { await btn.click(); isClicked = true; break; }
                     }
                     if (isClicked) await delay(2000); else await delay(500);
-                } catch { await delay(500); }
+                } catch (e) { await delay(500); }
             }
 
             if (!redirected) throw new Error('Timeout menunggu redirect OAuth');
 
             console.log(`  ${logPrefix} ◆ Menukar Kode OAuth...`);
-            const { code, redirectUri: actualUri } = await Promise.race([
-                callbackPromise,
-                new Promise((_, rej) => setTimeout(() => rej(new Error('Callback timeout')), 15000))
-            ]);
+            const { code, redirectUri: actualUri } = await callbackPromise;
 
             await browser.close();
+            browser = null;
             if (!code) throw new Error('OAuth code tidak ditemukan');
 
             const tokens = await exchangeCodeForTokens(code, actualUri);
@@ -184,13 +190,16 @@ async function addAccounts() {
             const id = saveAccountToAG({ email, name, access_token: tokens.access_token, refresh_token: tokens.refresh_token, expires_in: tokens.expires_in, id_token: tokens.id_token });
             const index = loadIndex();
             addAccount(index, { id, email, name, disabled: false, proxy_disabled: false, created_at: Math.floor(Date.now() / 1000), last_used: Math.floor(Date.now() / 1000) });
-            saveIndex(index);
+            saveIndexSync(index);
 
-            console.log(`  ${logPrefix} ✔ BERHASIL!`);
+            console.log(`  ${logPrefix} ✔ BERHASIL! (token: ${redactToken(tokens.refresh_token)})`);
             successLines.add(account.raw); sukses++;
+
+            if (account.password) wipeString(account.password);
         } catch (err) {
             console.log(`  ${logPrefix} ✘ GAGAL: ${err.message}`); gagal++;
-            try { await browser?.close(); } catch (e) { console.log(`  ${logPrefix} browser close error: ${e.message}`); }
+            if (browser) { try { await browser.close(); } catch (e) { console.log(`  ${logPrefix} browser close error: ${e.message}`); } }
+            if (account.password) wipeString(account.password);
         }
     };
 
@@ -283,13 +292,8 @@ function showQuota() {
 
     const agRunning = isProcessRunning('antigravity_tools.exe');
     if (!agRunning) {
-        if (IS_WIN) {
-            logWarn('AG Manager tidak running. Data quota mungkin tidak up-to-date.');
-            logWarn('Buka AG Manager untuk auto-refresh quota setiap 15 menit.');
-        } else {
-            logInfo('Cek quota via tasklist hanya didukung di Windows.');
-            logInfo('Pastikan AG Manager running agar data quota up-to-date.');
-        }
+        logWarn('AG Manager tidak terdeteksi running. Data quota mungkin tidak up-to-date.');
+        logWarn('Buka AG Manager untuk auto-refresh quota setiap 15 menit.');
     } else {
         logInfo('AG Manager running. Data quota di-refresh otomatis setiap 15 menit.');
     }
@@ -301,28 +305,27 @@ function showQuota() {
         const isCurrent = a.id === index.current_account_id ? ' ← AKTIF' : '';
         const cur = a.id === index.current_account_id ? '*' : ' ';
 
-        const lastUpdate = accFile?.quota?.last_updated;
+        console.log(`  ${cur} ${String(i + 1).padStart(2)}. ${a.email}${isCurrent}`);
+
+        if (!accFile) {
+            logWarn(`     File akun tidak ditemukan untuk ID: ${a.id}`); logBlank(); return;
+        }
+
+        const lastUpdateRaw = accFile?.quota?.last_updated;
+        const lastUpdate = quota.normalizeTimestamp(lastUpdateRaw);
         const lastUpdateStr = lastUpdate ? formatDate(lastUpdate) : 'belum pernah';
         const minsAgo = lastUpdate ? Math.round((Date.now() / 1000 - lastUpdate) / 60) : null;
         const freshStr = minsAgo !== null ? ` (${minsAgo < 60 ? minsAgo + ' menit lalu' : Math.round(minsAgo/60) + ' jam lalu'})` : '';
 
-        console.log(`  ${cur} ${String(i + 1).padStart(2)}. ${a.email}${isCurrent}`);
         console.log(`       Last update: ${lastUpdateStr}${freshStr}`);
 
-        if (!accFile?.quota?.quota_groups?.length) {
+        const quotaLines = quota.formatQuotaDisplay(accFile, quotaBar);
+        if (!quotaLines) {
             logWarn('     Data quota belum tersedia. Pastikan AG Manager sudah running.'); logBlank(); return;
         }
 
-        const buckets = accFile.quota.quota_groups[0]?.buckets || [];
-        if (!buckets.length) { logWarn('     Tidak ada data bucket.'); logBlank(); return; }
-
         logBlank();
-        buckets.forEach(b => {
-            const name = b.display_name.padEnd(30);
-            const bar = quotaBar(b.remaining_fraction);
-            const reset = b.description ? `  ${b.description}` : '';
-            console.log(`       ${name} ${bar}${reset}`);
-        });
+        quotaLines.forEach(line => console.log(line));
         logBlank();
     });
 
@@ -340,7 +343,7 @@ async function autoDeleteExpired() {
 
     logInfo(`Memeriksa ${index.accounts.length} akun...`); logBlank();
 
-    let valid = 0, deleted = 0, errNet = 0;
+    let valid = 0, deleted = 0, skipped = 0;
     const deletedEmails = [];
     const idsToDelete = new Set();
 
@@ -358,19 +361,40 @@ async function autoDeleteExpired() {
 
         const result = await validateToken(rt);
 
-        if (result.ok) { console.log('✔ valid'); valid++; }
-        else if (result.error === 'network_error') { console.log('! network error, dilewati'); errNet++; }
-        else {
-            console.log(`✘ ${result.error || 'invalid'} → dihapus`);
-            idsToDelete.add(a.id); deletedEmails.push(a.email); deleted++;
+        if (result.ok) {
+            console.log('✔ valid'); valid++;
+        } else {
+            const cls = result.classification || classifyTokenError(result.error);
+
+            if (cls === 'network_error' || cls === 'rate_limit' || cls === 'server_error') {
+                console.log(`! ${cls}: ${result.error} → dilewati`); skipped++;
+            } else if (cls === 'invalid_grant') {
+                console.log(`✘ invalid_grant → dihapus`); idsToDelete.add(a.id); deletedEmails.push(a.email); deleted++;
+            } else {
+                console.log(`✘ ${result.error || 'unknown'} → dihapus`); idsToDelete.add(a.id); deletedEmails.push(a.email); deleted++;
+            }
         }
     }
 
-    removeAccounts(index, [...idsToDelete]);
-    saveIndex(index);
+    if (idsToDelete.size > 0) {
+        const backupPath = backupIndex();
+        if (backupPath) logInfo(`Backup index disimpan: ${backupPath}`);
+
+        if (idsToDelete.size >= 5) {
+            logBlank();
+            logWarn(`Akan menghapus ${idsToDelete.size} akun secara massal!`);
+            const confirm = await ask('  Yakin hapus massal? (y/n): ');
+            if (confirm.trim().toLowerCase() !== 'y') {
+                logWarn('Dibatalkan. Tidak ada yang dihapus.'); logBlank(); return;
+            }
+        }
+
+        removeAccounts(index, [...idsToDelete]);
+        saveIndexSync(index);
+    }
 
     logBlank(); logLine();
-    console.log(`  HASIL  ✔ ${valid} valid  |  ✘ ${deleted} dihapus  |  ! ${errNet} network error`);
+    console.log(`  HASIL  ✔ ${valid} valid  |  ✘ ${deleted} dihapus  |  ! ${skipped} dilewati`);
     logLine();
 
     if (deletedEmails.length) {
@@ -414,7 +438,7 @@ function enableAllProxies() {
     });
 
     if (count > 0) {
-        saveIndex(index);
+        saveIndexSync(index);
         logBlank(); logOk(`${count} akun berhasil di-enable kembali proxy-nya.`);
         logWarn('Restart AG Manager agar perubahan diterapkan.');
     } else {
@@ -449,7 +473,7 @@ async function refreshAllAccounts() {
             af.token.expiry_timestamp = now + expiresIn;
             if (result.data.refresh_token) af.token.refresh_token = result.data.refresh_token;
             if (result.data.id_token) af.token.id_token = result.data.id_token;
-            saveAccount(af);
+            await saveAccount(af);
             return { indexNum, email: a.email, status: 'sukses', message: 'Token diperbarui' };
         } else {
             return { indexNum, email: a.email, status: 'gagal', message: result.data?.error || result.error || 'invalid_grant' };
@@ -595,6 +619,30 @@ async function autoStartServices() {
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
+    logBlank(); logLine();
+    console.log('  PREFLIGHT CHECK');
+    logLine();
+    const checks = preflightCheck();
+    let allOk = true;
+    for (const c of checks) {
+        const icon = c.ok ? '✔' : '✘';
+        console.log(`  ${icon} ${c.name.padEnd(20)} ${c.detail}`);
+        if (!c.ok) allOk = false;
+    }
+    logLine();
+    if (!allOk) {
+        logWarn('Beberapa komponen tidak ditemukan. Beberapa fitur mungkin tidak berfungsi.');
+        logWarn('Pastikan Chromium, Python, dan AG Manager sudah terinstal.');
+        logBlank();
+        await ask('  Tekan Enter untuk lanjut...');
+    }
+
+    const index = loadIndex();
+    const orphanCount = cleanupOrphans(index);
+    if (orphanCount > 0) {
+        logInfo(`Ditemukan dan dihapus ${orphanCount} orphan account file.`);
+    }
+
     await autoStartServices();
     if (isAuto429On()) {
         auto429Monitor = createDeleteMonitor('');
@@ -648,4 +696,10 @@ async function main() {
     }
 }
 
-main().catch(err => { console.log(`  ✘ Fatal error: ${err.message}`); close(); });
+module.exports = { main, addAccounts, listAccounts, deleteAccount,
+    showQuota, autoDeleteExpired, enableAllProxies, refreshAllAccounts,
+    toggleAuto429, toggleAutoDisableProxy };
+
+if (require.main === module) {
+    main().catch(err => { console.log(`  ✘ Fatal error: ${err.message}`); close(); });
+}

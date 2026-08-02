@@ -1,10 +1,12 @@
 {
   "name": "agctlv2",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "CLI otomatisasi untuk mengelola akun, proxy, dan kuota Antigravity Manager",
   "main": "manage.js",
   "scripts": {
-    "start": "node manage.js"
+    "start": "node manage.js",
+    "test": "node --test tests/*.test.js",
+    "check": "node --check manage.js && node --check lib/*.js"
   },
   "dependencies": {
     "puppeteer": "^25.4.0"

@@ -189,17 +189,24 @@ Salin `.env.example` ke `.env` untuk kustomisasi.
 agctlv2/
 ├── manage.js              # Entry point — menu CLI dan orchestration
 ├── lib/
-│   ├── platform.js        # Runtime adapter: paths, browser, process, python
+│   ├── platform.js        # Runtime adapter: paths, browser, process, python, preflight
 │   ├── credentials.js     # OAuth credentials + device profile (env vars support)
-│   ├── store.js           # AccountStore: atomic write, load/save index & akun
-│   ├── oauth.js           # OAuth flow: callback server, token exchange, refresh
-│   ├── monitor.js         # 429 monitor: polling SQLite, delete/disable callback
+│   ├── store.js           # AccountStore: atomic write, lock, schema validation, orphan cleanup
+│   ├── oauth.js           # OAuth flow: state validation, retry, error classification, redaction
+│   ├── monitor.js         # 429 monitor: node:sqlite native, callback pattern, skip historical
+│   ├── quota.js           # Quota parser: multi-group, clamp, timestamp normalization
+│   ├── akun-parser.js     # akun.txt parser: komentar, validasi email, split separator pertama
 │   └── ui.js              # CLI helpers: logging, formatting, readline
+├── tests/
+│   ├── akun-parser.test.js
+│   ├── quota.test.js
+│   ├── store.test.js
+│   └── oauth.test.js
 ├── package.json
-├── .env.example           # Template environment variables
+├── .env.example
 ├── .gitignore
-├── AGENTS.md              # Panduan AI agent
-├── CLAUDE.md              # Quick reference Claude Code
+├── AGENTS.md
+├── CLAUDE.md
 ├── akun.txt               # Input akun (TIDAK di-commit)
 ├── auto429.json           # State monitor (TIDAK di-commit)
 └── autodisableproxy.json  # State monitor (TIDAK di-commit)
