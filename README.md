@@ -72,11 +72,12 @@ Begitu dijalankan, kamu akan disambut dengan CLI Control Panel keren ala termina
   1.  TAMBAH AKUN BARU
   2.  LIST SEMUA AKUN
   3.  HAPUS AKUN
-  4.  AUTO DELETE EXPIRED
-  5.  AUTO DELETE 429: [ OFF ]
-  6.  AUTO ENABLE PROXY
-  7.  AUTO DISABLE PROXY 429: [ OFF ]
-  8.  REFRESH ALL ACCOUNTS
+  4.  LIHAT KUOTA
+  5.  AUTO DELETE EXPIRED
+  6.  AUTO DELETE 429: [ OFF ]
+  7.  AUTO ENABLE PROXY
+  8.  AUTO DISABLE PROXY 429: [ OFF ]
+  9.  REFRESH ALL ACCOUNTS
   0.  KELUAR
 
   Pilih menu: _
@@ -84,7 +85,7 @@ Begitu dijalankan, kamu akan disambut dengan CLI Control Panel keren ala termina
 
 ### 🔧 Mekanisme Stealth (Anti-Pop Up)
 Aplikasi ini sudah dipatenkan memiliki tingkat invasi layar 0%. 
-Jika kalian mengeksekusi Menu `[1] ADD ACCOUNT` atau `[8] REFRESH ALL ACCOUNTS`:
+Jika kalian mengeksekusi Menu `[1] ADD ACCOUNT` atau `[9] REFRESH ALL ACCOUNTS`:
 1. *Browser Puppeteer* berwujud 100% konsol murni.
 2. Saat penyimpanan terselesaikan, fitur OS di Windows sangat bandel menampilkan layar UI Antigravity Tools saat di _restart_. **Ini sudah ditangani!** 
 Skrip otomatis menyuntikkan `.vbs` temporer rahasia (Windows Script Host) dan menjalankan Antigravity Tools beserta *Arg 0* (`Completely Hidden`), membunuh kemungkinan render *window graphic* tanpa sepengetahuan OS. Sangat aman dan tenteram digunakan sambil bermain *Game Full-screen* atau menatap Visual Studio Code.  

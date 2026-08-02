@@ -27,6 +27,9 @@ node manage.js
 agctlv2/
 ├── manage.js              # Source code utama (semua logika ada di sini)
 ├── package.json           # NPM manifest
+├── .gitignore             # node_modules, akun.txt, state JSON, log
+├── AGENTS.md              # Instruksi untuk AI agent
+├── CLAUDE.md              # Quick reference untuk Claude Code
 ├── akun.txt               # File input akun (TIDAK di-commit)
 ├── auto429.json           # State Auto Delete 429 (TIDAK di-commit)
 ├── autodisableproxy.json  # State Auto Disable Proxy (TIDAK di-commit)

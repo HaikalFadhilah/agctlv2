@@ -46,8 +46,6 @@ function logStep(icon, msg) {
 function logInfo(msg)    { logStep('◆', msg); }
 function logOk(msg)      { logStep('✔', msg); }
 function logWarn(msg)    { logStep('!', msg); }
-function logError(msg)   { logStep('✘', msg); }
-function logClick(msg)   { logStep('↵', msg); }
 function logBlank()      { console.log(''); }
 
 // ── Helpers umum ──────────────────────────────────────────────────────────────
@@ -56,6 +54,13 @@ const delay = (ms) => new Promise(r => setTimeout(r, ms));
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const ask = (q) => new Promise(resolve => rl.question(q, resolve));
 function clear() { process.stdout.write('\x1Bc'); }
+
+process.on('SIGINT', () => {
+    stopAuto429Monitor();
+    stopAutoDisableProxyMonitor();
+    rl.close();
+    process.exit(0);
+});
 
 function formatDate(ts) {
     if (!ts) return '-';
@@ -87,6 +92,7 @@ function loadAccountFile(id) {
 }
 
 function saveAccountFile(account) {
+    if (!fs.existsSync(ACCOUNTS_DIR)) fs.mkdirSync(ACCOUNTS_DIR, { recursive: true });
     fs.writeFileSync(path.join(ACCOUNTS_DIR, `${account.id}.json`), JSON.stringify(account, null, 2));
 }
 
@@ -193,7 +199,7 @@ async function addAccounts() {
         .split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
 
     const accounts = rawLines.map(line => {
-        const parts = line.split(/[:|,|]/);
+        const parts = line.split(/[:|,]/);
         return { email: parts[0]?.trim(), password: parts[1]?.trim(), raw: line };
     });
 
@@ -468,51 +474,6 @@ function quotaBar(fraction, width = 20) {
     return `${bar} ${String(pct).padStart(3)}%`;
 }
 
-// Parse log AG Manager hari ini untuk cari akun yang kena 429 QuotaExhausted
-function parseQuotaExhaustedFromLog() {
-    const exhausted = new Map();
-    try {
-        const today = new Date().toISOString().slice(0, 10);
-        const logFile = path.join(AG_DIR, 'logs', `app.log.${today}`);
-        if (!fs.existsSync(logFile)) return exhausted;
-
-        const content = fs.readFileSync(logFile, 'utf-8');
-        const lines   = content.split('\n');
-
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i];
-
-            const tsMatch = line.match(/"quotaResetTimeStamp":\s*"([^"]+)"/);
-            const dlMatch = line.match(/"quotaResetDelay":\s*"([^"]+)"/);
-
-            if (tsMatch) {
-                const resetTs = new Date(tsMatch[1]);
-                let detectedAt = new Date();
-                let resetDelay = '';
-                for (let j = Math.max(0, i - 5); j <= i + 5; j++) {
-                    const tMatch = (lines[j] || '').match(/^(\d{4}-\d{2}-\d{2}T[\d:.]+[+-]\d{2}:\d{2})/);
-                    if (tMatch) { detectedAt = new Date(tMatch[1]); }
-                    const dMatch = (lines[j] || '').match(/"quotaResetDelay":\s*"([^"]+)"/);
-                    if (dMatch) { resetDelay = dMatch[1]; }
-                }
-
-                for (let j = Math.max(0, i - 10); j <= i + 10; j++) {
-                    const uuidMatch = (lines[j] || '').match(/rate_limit:.*?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
-                    if (uuidMatch) {
-                        const acctId = uuidMatch[1];
-                        const existing = exhausted.get(acctId);
-                        if (!existing || detectedAt > existing.detectedAt) {
-                            exhausted.set(acctId, { resetTimestamp: resetTs, resetDelay, detectedAt });
-                        }
-                        break;
-                    }
-                }
-            }
-        }
-    } catch (e) { /* silent */ }
-    return exhausted;
-}
-
 function showQuota() {
     const index = loadIndex();
     logBlank();
@@ -775,18 +736,16 @@ function enableAllProxies() {
     index.accounts.forEach(a => {
         let isProxyOff = false;
 
-        // Cek status dari file index dulu
-        if (a.proxy_disabled === true || a.proxy_disabled === "true") {
+        if (a.proxy_disabled === true) {
             isProxyOff = true;
         }
 
-        // Kalau di index tidak ada, cek status real dari file UUID.json masing-masing
         const file = path.join(ACCOUNTS_DIR, `${a.id}.json`);
         let accData = null;
         if (fs.existsSync(file)) {
             try {
                 accData = JSON.parse(fs.readFileSync(file, 'utf-8'));
-                if (accData.proxy_disabled === true || accData.proxy_disabled === "true") {
+                if (accData.proxy_disabled === true) {
                     isProxyOff = true;
                 }
             } catch { /* silent */ }
@@ -1129,46 +1088,6 @@ async function toggleAutoDisableProxy() {
     return newState;
 }
 
-// ── Auto Refresh AG Manager ───────────────────────────────────────────────────
-
-async function refreshAgManager() {
-    const { execSync, spawn } = require('child_process');
-    if (process.platform !== 'win32') return false;
-
-    try {
-        execSync('taskkill /F /IM antigravity_tools.exe', { encoding: 'utf-8' });
-    } catch { /* sudah mati atau tidak bisa di-kill */ }
-
-    await delay(1500);
-
-    if (!fs.existsSync(AG_EXE)) {
-        logWarn('AG Manager exe tidak ditemukan, skip auto-refresh.');
-        return false;
-    }
-
-    // Jalankan AG Manager secara background (menyembunyikan jendela GUI aslinya via PowerShell)
-    try {
-        const { execSync } = require('child_process');
-        execSync(`powershell -Command "Start-Process -FilePath '${AG_EXE}' -WindowStyle Hidden"`, { windowsHide: true, stdio: 'ignore' });
-    } catch {
-        // Fallback jika powershell gagal
-        const child = spawn(AG_EXE, [], { 
-            detached: true, 
-            stdio: 'ignore',
-            windowsHide: true 
-        });
-        child.unref();
-    }
-
-    for (let i = 0; i < 10; i++) {
-        await delay(1000);
-        if (isAgRunning()) {
-            return true;
-        }
-    }
-    return false;
-}
-
 const GUI_CONFIG     = path.join(AG_DIR, 'gui_config.json');
 const AG_EXE         = path.join(LOCAL_APP_DATA, 'Antigravity Tools', 'antigravity_tools.exe');
 
@@ -1182,6 +1101,7 @@ function saveGuiConfig(cfg) {
 }
 
 function isAgRunning() {
+    if (process.platform !== 'win32') return false;
     try {
         const { execSync } = require('child_process');
         const out = execSync('tasklist', { encoding: 'utf-8' });
@@ -1319,11 +1239,12 @@ async function main() {
         console.log('  1.  TAMBAH AKUN BARU');
         console.log('  2.  LIST SEMUA AKUN');
         console.log('  3.  HAPUS AKUN');
-        console.log('  4.  AUTO DELETE EXPIRED');
-        console.log(`  5.  ${auto429Label}`);
-        console.log('  6.  AUTO ENABLE PROXY');
-        console.log(`  7.  ${autoDisableProxyLabel}`);
-        console.log('  8.  REFRESH ALL ACCOUNTS');
+        console.log('  4.  LIHAT KUOTA');
+        console.log('  5.  AUTO DELETE EXPIRED');
+        console.log(`  6.  ${auto429Label}`);
+        console.log('  7.  AUTO ENABLE PROXY');
+        console.log(`  8.  ${autoDisableProxyLabel}`);
+        console.log('  9.  REFRESH ALL ACCOUNTS');
         console.log('  0.  KELUAR');
         logBlank();
 
@@ -1333,11 +1254,12 @@ async function main() {
             case '1': clear(); printHeader(); logBlank(); logLine(); console.log('  TAMBAH AKUN'); logLine(); await addAccounts(); await ask('  Tekan Enter untuk kembali...'); break;
             case '2': clear(); printHeader(); logBlank(); logLine(); console.log('  DAFTAR AKUN'); logLine(); listAccounts(); await ask('  Tekan Enter untuk kembali...'); break;
             case '3': clear(); printHeader(); logBlank(); logLine(); console.log('  HAPUS AKUN'); logLine(); await deleteAccount(); await ask('  Tekan Enter untuk kembali...'); break;
-            case '4': clear(); printHeader(); logBlank(); logLine(); console.log('  AUTO DELETE EXPIRED'); logLine(); await autoDeleteExpired(); await ask('  Tekan Enter untuk kembali...'); break;
-            case '5': { const on = toggleAuto429(); logBlank(); if(on !== false) logOk(`Auto Delete 429 sekarang: ${on ? 'ON' : 'OFF'}`); logBlank(); await ask('  Tekan Enter untuk kembali...'); break; }
-            case '6': clear(); printHeader(); logBlank(); logLine(); console.log('  AUTO ENABLE PROXY'); logLine(); enableAllProxies(); await ask('  Tekan Enter untuk kembali...'); break;
-            case '7': { const on = await toggleAutoDisableProxy(); logBlank(); if(on !== false) logOk(`Auto Disable Proxy 429 sekarang: ${on ? 'ON' : 'OFF'}`); logBlank(); await ask('  Tekan Enter untuk kembali...'); break; }
-            case '8': clear(); printHeader(); logBlank(); logLine(); console.log('  REFRESH ALL ACCOUNTS'); logLine(); await refreshAllAccounts(); await ask('  Tekan Enter untuk kembali...'); break;
+            case '4': clear(); printHeader(); logBlank(); logLine(); console.log('  LIHAT KUOTA'); logLine(); showQuota(); await ask('  Tekan Enter untuk kembali...'); break;
+            case '5': clear(); printHeader(); logBlank(); logLine(); console.log('  AUTO DELETE EXPIRED'); logLine(); await autoDeleteExpired(); await ask('  Tekan Enter untuk kembali...'); break;
+            case '6': { const on = toggleAuto429(); logBlank(); if(on !== false) logOk(`Auto Delete 429 sekarang: ${on ? 'ON' : 'OFF'}`); logBlank(); await ask('  Tekan Enter untuk kembali...'); break; }
+            case '7': clear(); printHeader(); logBlank(); logLine(); console.log('  AUTO ENABLE PROXY'); logLine(); enableAllProxies(); await ask('  Tekan Enter untuk kembali...'); break;
+            case '8': { const on = await toggleAutoDisableProxy(); logBlank(); if(on !== false) logOk(`Auto Disable Proxy 429 sekarang: ${on ? 'ON' : 'OFF'}`); logBlank(); await ask('  Tekan Enter untuk kembali...'); break; }
+            case '9': clear(); printHeader(); logBlank(); logLine(); console.log('  REFRESH ALL ACCOUNTS'); logLine(); await refreshAllAccounts(); await ask('  Tekan Enter untuk kembali...'); break;
             case '0': logBlank(); console.log('  Bye!'); logBlank(); rl.close(); process.exit(0); break;
             default:  logWarn('Pilihan tidak valid.'); await delay(200);
         }

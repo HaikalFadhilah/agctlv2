@@ -29,11 +29,12 @@ node manage.js     # jalankan CLI
 1. Tambah Akun (concurrent headless OAuth)
 2. List Akun
 3. Hapus Akun
-4. Auto Delete Expired (validasi refresh token)
-5. Auto Delete 429 (monitor SQLite, toggle on/off)
-6. Auto Enable Proxy (reset semua proxy_disabled)
-7. Auto Disable Proxy 429 (monitor + disable proxy, filter model)
-8. Refresh All Accounts (refresh token batch)
+4. Lihat Kuota (progress bar per bucket)
+5. Auto Delete Expired (validasi refresh token)
+6. Auto Delete 429 (monitor SQLite, toggle on/off)
+7. Auto Enable Proxy (reset semua proxy_disabled)
+8. Auto Disable Proxy 429 (monitor + disable proxy, filter model)
+9. Refresh All Accounts (refresh token batch)
 
 ## Aturan Edit
 
