@@ -1,6 +1,7 @@
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const https = require('https');
 const readline = require('readline');
 const { randomUUID } = require('crypto');
@@ -18,7 +19,9 @@ const SCOPES        = [
     'https://www.googleapis.com/auth/experimentsandconfigs'
 ].join(' ');
 
-const AG_DIR        = path.join(process.env.USERPROFILE, '.antigravity_tools');
+const HOME_DIR      = process.env.USERPROFILE || process.env.HOME || os.homedir();
+const LOCAL_APP_DATA = process.env.LOCALAPPDATA || path.join(HOME_DIR, 'AppData', 'Local');
+const AG_DIR        = process.env.AG_TOOLS_DIR || path.join(HOME_DIR, '.antigravity_tools');
 const ACCOUNTS_DIR  = path.join(AG_DIR, 'accounts');
 const ACCOUNTS_INDEX = path.join(AG_DIR, 'accounts.json');
 
@@ -43,8 +46,6 @@ function logStep(icon, msg) {
 function logInfo(msg)    { logStep('◆', msg); }
 function logOk(msg)      { logStep('✔', msg); }
 function logWarn(msg)    { logStep('!', msg); }
-function logError(msg)   { logStep('✘', msg); }
-function logClick(msg)   { logStep('↵', msg); }
 function logBlank()      { console.log(''); }
 
 // ── Helpers umum ──────────────────────────────────────────────────────────────
@@ -53,6 +54,13 @@ const delay = (ms) => new Promise(r => setTimeout(r, ms));
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const ask = (q) => new Promise(resolve => rl.question(q, resolve));
 function clear() { process.stdout.write('\x1Bc'); }
+
+process.on('SIGINT', () => {
+    stopAuto429Monitor();
+    stopAutoDisableProxyMonitor();
+    rl.close();
+    process.exit(0);
+});
 
 function formatDate(ts) {
     if (!ts) return '-';
@@ -84,6 +92,7 @@ function loadAccountFile(id) {
 }
 
 function saveAccountFile(account) {
+    if (!fs.existsSync(ACCOUNTS_DIR)) fs.mkdirSync(ACCOUNTS_DIR, { recursive: true });
     fs.writeFileSync(path.join(ACCOUNTS_DIR, `${account.id}.json`), JSON.stringify(account, null, 2));
 }
 
@@ -190,7 +199,7 @@ async function addAccounts() {
         .split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
 
     const accounts = rawLines.map(line => {
-        const parts = line.split(/[:|,|]/);
+        const parts = line.split(/[:|,]/);
         return { email: parts[0]?.trim(), password: parts[1]?.trim(), raw: line };
     });
 
@@ -249,11 +258,17 @@ async function addAccounts() {
             const callbackPort  = await findFreePort(); // Pastikan tiap thread pakai port unik miliknya sendiri
             const redirectUri   = `http://localhost:${callbackPort}/oauth-callback`;
             const AUTH_URL      = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(SCOPES)}&access_type=offline&prompt=consent&include_granted_scopes=true&state=${randomUUID()}`;
+            const systemBrowser = process.env.PUPPETEER_EXECUTABLE_PATH || (
+                process.platform === 'linux'
+                    ? ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome'].find(fs.existsSync)
+                    : undefined
+            );
 
             const callbackPromise = startCallbackServer(callbackPort);
 
             // Headless true dengan config Chrome bot siluman ----------------
             browser = await puppeteer.launch({
+                executablePath: systemBrowser,
                 headless: 'shell',
                 args: [
                     '--no-sandbox',
@@ -459,57 +474,13 @@ function quotaBar(fraction, width = 20) {
     return `${bar} ${String(pct).padStart(3)}%`;
 }
 
-// Parse log AG Manager hari ini untuk cari akun yang kena 429 QuotaExhausted
-function parseQuotaExhaustedFromLog() {
-    const exhausted = new Map();
-    try {
-        const today = new Date().toISOString().slice(0, 10);
-        const logFile = path.join(AG_DIR, 'logs', `app.log.${today}`);
-        if (!fs.existsSync(logFile)) return exhausted;
-
-        const content = fs.readFileSync(logFile, 'utf-8');
-        const lines   = content.split('\n');
-
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i];
-
-            const tsMatch = line.match(/"quotaResetTimeStamp":\s*"([^"]+)"/);
-            const dlMatch = line.match(/"quotaResetDelay":\s*"([^"]+)"/);
-
-            if (tsMatch) {
-                const resetTs = new Date(tsMatch[1]);
-                let detectedAt = new Date();
-                let resetDelay = '';
-                for (let j = Math.max(0, i - 5); j <= i + 5; j++) {
-                    const tMatch = (lines[j] || '').match(/^(\d{4}-\d{2}-\d{2}T[\d:.]+[+-]\d{2}:\d{2})/);
-                    if (tMatch) { detectedAt = new Date(tMatch[1]); }
-                    const dMatch = (lines[j] || '').match(/"quotaResetDelay":\s*"([^"]+)"/);
-                    if (dMatch) { resetDelay = dMatch[1]; }
-                }
-
-                for (let j = Math.max(0, i - 10); j <= i + 10; j++) {
-                    const uuidMatch = (lines[j] || '').match(/rate_limit:.*?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
-                    if (uuidMatch) {
-                        const acctId = uuidMatch[1];
-                        const existing = exhausted.get(acctId);
-                        if (!existing || detectedAt > existing.detectedAt) {
-                            exhausted.set(acctId, { resetTimestamp: resetTs, resetDelay, detectedAt });
-                        }
-                        break;
-                    }
-                }
-            }
-        }
-    } catch (e) { /* silent */ }
-    return exhausted;
-}
-
 function showQuota() {
     const index = loadIndex();
     logBlank();
     if (!index.accounts.length) { logWarn('Tidak ada akun.'); logBlank(); return; }
 
     const agRunning = (() => {
+        if (process.platform !== 'win32') return false;
         try {
             const { execSync } = require('child_process');
             const out = execSync('tasklist /FI "IMAGENAME eq antigravity_tools.exe" /NH', { encoding: 'utf-8' });
@@ -518,8 +489,13 @@ function showQuota() {
     })();
 
     if (!agRunning) {
-        logWarn('AG Manager tidak running. Data quota mungkin tidak up-to-date.');
-        logWarn('Buka AG Manager untuk auto-refresh quota setiap 15 menit.');
+        if (process.platform === 'win32') {
+            logWarn('AG Manager tidak running. Data quota mungkin tidak up-to-date.');
+            logWarn('Buka AG Manager untuk auto-refresh quota setiap 15 menit.');
+        } else {
+            logInfo('Cek quota via tasklist hanya didukung di Windows.');
+            logInfo('Pastikan AG Manager running agar data quota up-to-date.');
+        }
     } else {
         logInfo('AG Manager running. Data quota di-refresh otomatis setiap 15 menit.');
     }
@@ -760,18 +736,16 @@ function enableAllProxies() {
     index.accounts.forEach(a => {
         let isProxyOff = false;
 
-        // Cek status dari file index dulu
-        if (a.proxy_disabled === true || a.proxy_disabled === "true") {
+        if (a.proxy_disabled === true) {
             isProxyOff = true;
         }
 
-        // Kalau di index tidak ada, cek status real dari file UUID.json masing-masing
         const file = path.join(ACCOUNTS_DIR, `${a.id}.json`);
         let accData = null;
         if (fs.existsSync(file)) {
             try {
                 accData = JSON.parse(fs.readFileSync(file, 'utf-8'));
-                if (accData.proxy_disabled === true || accData.proxy_disabled === "true") {
+                if (accData.proxy_disabled === true) {
                     isProxyOff = true;
                 }
             } catch { /* silent */ }
@@ -907,23 +881,21 @@ async function refreshAllAccounts() {
     console.log(`  SELESAI  ✔ ${sukses} berhasil di-refresh  |  ✘ ${gagal} gagal`);
     logLine();
     
-    if (sukses > 0) {
+    if (sukses > 0 && process.platform === 'win32') {
         logBlank();
         
         try {
             logInfo('Melakukan auto-refresh AG Manager di latar belakang...');
-            const pathInfo = require('path');
-            const fsInfo = require('fs');
             const { execSync } = require('child_process');
             
             // 1. Matikan AG Tools (silent kill)
             try { execSync('taskkill /F /IM antigravity_tools.exe 2>nul', {stdio: 'ignore'}); } catch(e){}
             
             // 2. Buat launcher VBS di Temp untuk restart AG secara full stealth (tanpa pop up GUI sekejap pun)
-            const agExePath = pathInfo.join(process.env.LOCALAPPDATA, 'Antigravity Tools', 'antigravity_tools.exe');
-            if (fsInfo.existsSync(agExePath)) {
-                const vbsFile = pathInfo.join(process.env.TEMP, 'run_ag.vbs');
-                fsInfo.writeFileSync(vbsFile, `CreateObject("WScript.Shell").Run """${agExePath}""", 0, False`);
+            const agExePath = path.join(LOCAL_APP_DATA, 'Antigravity Tools', 'antigravity_tools.exe');
+            if (fs.existsSync(agExePath)) {
+                const vbsFile = path.join(process.env.TEMP, 'run_ag.vbs');
+                fs.writeFileSync(vbsFile, `CreateObject("WScript.Shell").Run """${agExePath}""", 0, False`);
                 
                 // 3. Jalankan file VBS
                 execSync(`cscript //nologo "${vbsFile}"`, { windowsHide: true, stdio: 'ignore' });
@@ -938,29 +910,45 @@ async function refreshAllAccounts() {
     logBlank();
 }
 
+function findPython() {
+    const { execSync } = require('child_process');
+    for (const cmd of ['python', 'python3', 'py']) {
+        try {
+            execSync(`${cmd} --version`, { stdio: 'ignore', timeout: 3000, shell: true });
+            return cmd;
+        } catch {}
+    }
+    return null;
+}
+
 function poll429FromDb(lastTs, modelFilter = '') {
     const { execFileSync } = require('child_process');
-    let condition = "status=429 AND timestamp>?";
-    if (modelFilter) {
-        condition += ` AND model LIKE '%${modelFilter}%'`;
-    }
+    const python = findPython();
+    if (!python) return [];
+
     const script = `
 import sqlite3, json, sys
-db = r"${PROXY_LOGS_DB.replace(/\\/g, '\\\\')}"
-ts = ${lastTs}
+db = sys.argv[1]
+ts = int(sys.argv[2])
+model = sys.argv[3] if len(sys.argv) > 3 else ""
 try:
     conn = sqlite3.connect(db)
     conn.text_factory = lambda b: b.decode("utf-8", errors="replace")
     cur = conn.cursor()
-    cur.execute("SELECT timestamp, account_email FROM request_logs WHERE ${condition} ORDER BY timestamp ASC", (ts,))
+    if model:
+        cur.execute("SELECT timestamp, account_email FROM request_logs WHERE status=429 AND timestamp>? AND model LIKE ? ORDER BY timestamp ASC", (ts, "%" + model + "%"))
+    else:
+        cur.execute("SELECT timestamp, account_email FROM request_logs WHERE status=429 AND timestamp>? ORDER BY timestamp ASC", (ts,))
     rows = cur.fetchall()
     conn.close()
     print(json.dumps(rows))
-except Exception as e:
+except Exception:
     print("[]")
 `;
     try {
-        const out = execFileSync('C:\\Python313\\python.exe', ['-c', script], { encoding: 'utf-8', timeout: 5000 });
+        const args = ['-c', script, PROXY_LOGS_DB, String(lastTs)];
+        if (modelFilter) args.push(modelFilter);
+        const out = execFileSync(python, args, { encoding: 'utf-8', timeout: 5000, shell: true });
         return JSON.parse(out.trim() || '[]');
     } catch { return []; }
 }
@@ -1100,46 +1088,8 @@ async function toggleAutoDisableProxy() {
     return newState;
 }
 
-// ── Auto Refresh AG Manager ───────────────────────────────────────────────────
-
-async function refreshAgManager() {
-    const { execSync, spawn } = require('child_process');
-    try {
-        execSync('taskkill /F /IM antigravity_tools.exe', { encoding: 'utf-8' });
-    } catch { /* sudah mati atau tidak bisa di-kill */ }
-
-    await delay(1500);
-
-    if (!fs.existsSync(AG_EXE)) {
-        logWarn('AG Manager exe tidak ditemukan, skip auto-refresh.');
-        return false;
-    }
-
-    // Jalankan AG Manager secara background (menyembunyikan jendela GUI aslinya via PowerShell)
-    try {
-        const { execSync } = require('child_process');
-        execSync(`powershell -Command "Start-Process -FilePath '${AG_EXE}' -WindowStyle Hidden"`, { windowsHide: true, stdio: 'ignore' });
-    } catch {
-        // Fallback jika powershell gagal
-        const child = spawn(AG_EXE, [], { 
-            detached: true, 
-            stdio: 'ignore',
-            windowsHide: true 
-        });
-        child.unref();
-    }
-
-    for (let i = 0; i < 10; i++) {
-        await delay(1000);
-        if (isAgRunning()) {
-            return true;
-        }
-    }
-    return false;
-}
-
 const GUI_CONFIG     = path.join(AG_DIR, 'gui_config.json');
-const AG_EXE         = path.join(process.env.LOCALAPPDATA, 'Antigravity Tools', 'antigravity_tools.exe');
+const AG_EXE         = path.join(LOCAL_APP_DATA, 'Antigravity Tools', 'antigravity_tools.exe');
 
 function loadGuiConfig() {
     try { return JSON.parse(fs.readFileSync(GUI_CONFIG, 'utf-8')); }
@@ -1151,6 +1101,7 @@ function saveGuiConfig(cfg) {
 }
 
 function isAgRunning() {
+    if (process.platform !== 'win32') return false;
     try {
         const { execSync } = require('child_process');
         const out = execSync('tasklist', { encoding: 'utf-8' });
@@ -1175,6 +1126,7 @@ function ensureProxyConfig() {
 }
 
 async function ensureAgRunning() {
+    if (process.platform !== 'win32') return 'unsupported';
     if (isAgRunning()) return 'already';
 
     if (!fs.existsSync(AG_EXE)) {
@@ -1182,12 +1134,10 @@ async function ensureAgRunning() {
         return 'not_found';
     }
 
-    const { spawn } = require('child_process');
+    const { spawn, execSync } = require('child_process');
     
     // Setup VBScript Stealth Mode untuk force-hide aplikasi GUI nakal
     const vbsPath = path.join(process.env.TEMP, 'run_ag.vbs');
-    const { execSync } = require('child_process');
-    const fs = require('fs');
     
     // Tulis VB script ke sistem yang memaksa argumen rahasia "0" = Completely Hidden
     fs.writeFileSync(vbsPath, `CreateObject("WScript.Shell").Run """${AG_EXE}""", 0, False`);
@@ -1210,6 +1160,11 @@ async function autoStartServices() {
     const { execSync } = require('child_process');
 
     const configChanged = ensureProxyConfig();
+    if (process.platform !== 'win32') {
+        if (configChanged) logOk('Proxy config diupdate (enabled/auto_start).');
+        return;
+    }
+
     const agStatus = await ensureAgRunning();
 
     if (agStatus === 'launched') {
@@ -1284,11 +1239,12 @@ async function main() {
         console.log('  1.  TAMBAH AKUN BARU');
         console.log('  2.  LIST SEMUA AKUN');
         console.log('  3.  HAPUS AKUN');
-        console.log('  4.  AUTO DELETE EXPIRED');
-        console.log(`  5.  ${auto429Label}`);
-        console.log('  6.  AUTO ENABLE PROXY');
-        console.log(`  7.  ${autoDisableProxyLabel}`);
-        console.log('  8.  REFRESH ALL ACCOUNTS');
+        console.log('  4.  LIHAT KUOTA');
+        console.log('  5.  AUTO DELETE EXPIRED');
+        console.log(`  6.  ${auto429Label}`);
+        console.log('  7.  AUTO ENABLE PROXY');
+        console.log(`  8.  ${autoDisableProxyLabel}`);
+        console.log('  9.  REFRESH ALL ACCOUNTS');
         console.log('  0.  KELUAR');
         logBlank();
 
@@ -1298,11 +1254,12 @@ async function main() {
             case '1': clear(); printHeader(); logBlank(); logLine(); console.log('  TAMBAH AKUN'); logLine(); await addAccounts(); await ask('  Tekan Enter untuk kembali...'); break;
             case '2': clear(); printHeader(); logBlank(); logLine(); console.log('  DAFTAR AKUN'); logLine(); listAccounts(); await ask('  Tekan Enter untuk kembali...'); break;
             case '3': clear(); printHeader(); logBlank(); logLine(); console.log('  HAPUS AKUN'); logLine(); await deleteAccount(); await ask('  Tekan Enter untuk kembali...'); break;
-            case '4': clear(); printHeader(); logBlank(); logLine(); console.log('  AUTO DELETE EXPIRED'); logLine(); await autoDeleteExpired(); await ask('  Tekan Enter untuk kembali...'); break;
-            case '5': { const on = toggleAuto429(); logBlank(); if(on !== false) logOk(`Auto Delete 429 sekarang: ${on ? 'ON' : 'OFF'}`); logBlank(); await ask('  Tekan Enter untuk kembali...'); break; }
-            case '6': clear(); printHeader(); logBlank(); logLine(); console.log('  AUTO ENABLE PROXY'); logLine(); enableAllProxies(); await ask('  Tekan Enter untuk kembali...'); break;
-            case '7': { const on = await toggleAutoDisableProxy(); logBlank(); if(on !== false) logOk(`Auto Disable Proxy 429 sekarang: ${on ? 'ON' : 'OFF'}`); logBlank(); await ask('  Tekan Enter untuk kembali...'); break; }
-            case '8': clear(); printHeader(); logBlank(); logLine(); console.log('  REFRESH ALL ACCOUNTS'); logLine(); await refreshAllAccounts(); await ask('  Tekan Enter untuk kembali...'); break;
+            case '4': clear(); printHeader(); logBlank(); logLine(); console.log('  LIHAT KUOTA'); logLine(); showQuota(); await ask('  Tekan Enter untuk kembali...'); break;
+            case '5': clear(); printHeader(); logBlank(); logLine(); console.log('  AUTO DELETE EXPIRED'); logLine(); await autoDeleteExpired(); await ask('  Tekan Enter untuk kembali...'); break;
+            case '6': { const on = toggleAuto429(); logBlank(); if(on !== false) logOk(`Auto Delete 429 sekarang: ${on ? 'ON' : 'OFF'}`); logBlank(); await ask('  Tekan Enter untuk kembali...'); break; }
+            case '7': clear(); printHeader(); logBlank(); logLine(); console.log('  AUTO ENABLE PROXY'); logLine(); enableAllProxies(); await ask('  Tekan Enter untuk kembali...'); break;
+            case '8': { const on = await toggleAutoDisableProxy(); logBlank(); if(on !== false) logOk(`Auto Disable Proxy 429 sekarang: ${on ? 'ON' : 'OFF'}`); logBlank(); await ask('  Tekan Enter untuk kembali...'); break; }
+            case '9': clear(); printHeader(); logBlank(); logLine(); console.log('  REFRESH ALL ACCOUNTS'); logLine(); await refreshAllAccounts(); await ask('  Tekan Enter untuk kembali...'); break;
             case '0': logBlank(); console.log('  Bye!'); logBlank(); rl.close(); process.exit(0); break;
             default:  logWarn('Pilihan tidak valid.'); await delay(200);
         }
