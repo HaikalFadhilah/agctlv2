@@ -519,6 +519,7 @@ function showQuota() {
     if (!index.accounts.length) { logWarn('Tidak ada akun.'); logBlank(); return; }
 
     const agRunning = (() => {
+        if (process.platform !== 'win32') return false;
         try {
             const { execSync } = require('child_process');
             const out = execSync('tasklist /FI "IMAGENAME eq antigravity_tools.exe" /NH', { encoding: 'utf-8' });
@@ -527,8 +528,13 @@ function showQuota() {
     })();
 
     if (!agRunning) {
-        logWarn('AG Manager tidak running. Data quota mungkin tidak up-to-date.');
-        logWarn('Buka AG Manager untuk auto-refresh quota setiap 15 menit.');
+        if (process.platform === 'win32') {
+            logWarn('AG Manager tidak running. Data quota mungkin tidak up-to-date.');
+            logWarn('Buka AG Manager untuk auto-refresh quota setiap 15 menit.');
+        } else {
+            logInfo('Cek quota via tasklist hanya didukung di Windows.');
+            logInfo('Pastikan AG Manager running agar data quota up-to-date.');
+        }
     } else {
         logInfo('AG Manager running. Data quota di-refresh otomatis setiap 15 menit.');
     }
@@ -921,18 +927,16 @@ async function refreshAllAccounts() {
         
         try {
             logInfo('Melakukan auto-refresh AG Manager di latar belakang...');
-            const pathInfo = require('path');
-            const fsInfo = require('fs');
             const { execSync } = require('child_process');
             
             // 1. Matikan AG Tools (silent kill)
             try { execSync('taskkill /F /IM antigravity_tools.exe 2>nul', {stdio: 'ignore'}); } catch(e){}
             
             // 2. Buat launcher VBS di Temp untuk restart AG secara full stealth (tanpa pop up GUI sekejap pun)
-            const agExePath = pathInfo.join(process.env.LOCALAPPDATA, 'Antigravity Tools', 'antigravity_tools.exe');
-            if (fsInfo.existsSync(agExePath)) {
-                const vbsFile = pathInfo.join(process.env.TEMP, 'run_ag.vbs');
-                fsInfo.writeFileSync(vbsFile, `CreateObject("WScript.Shell").Run """${agExePath}""", 0, False`);
+            const agExePath = path.join(LOCAL_APP_DATA, 'Antigravity Tools', 'antigravity_tools.exe');
+            if (fs.existsSync(agExePath)) {
+                const vbsFile = path.join(process.env.TEMP, 'run_ag.vbs');
+                fs.writeFileSync(vbsFile, `CreateObject("WScript.Shell").Run """${agExePath}""", 0, False`);
                 
                 // 3. Jalankan file VBS
                 execSync(`cscript //nologo "${vbsFile}"`, { windowsHide: true, stdio: 'ignore' });
@@ -947,29 +951,45 @@ async function refreshAllAccounts() {
     logBlank();
 }
 
+function findPython() {
+    const { execSync } = require('child_process');
+    for (const cmd of ['python', 'python3', 'py']) {
+        try {
+            execSync(`${cmd} --version`, { stdio: 'ignore', timeout: 3000, shell: true });
+            return cmd;
+        } catch {}
+    }
+    return null;
+}
+
 function poll429FromDb(lastTs, modelFilter = '') {
     const { execFileSync } = require('child_process');
-    let condition = "status=429 AND timestamp>?";
-    if (modelFilter) {
-        condition += ` AND model LIKE '%${modelFilter}%'`;
-    }
+    const python = findPython();
+    if (!python) return [];
+
     const script = `
 import sqlite3, json, sys
-db = r"${PROXY_LOGS_DB.replace(/\\/g, '\\\\')}"
-ts = ${lastTs}
+db = sys.argv[1]
+ts = int(sys.argv[2])
+model = sys.argv[3] if len(sys.argv) > 3 else ""
 try:
     conn = sqlite3.connect(db)
     conn.text_factory = lambda b: b.decode("utf-8", errors="replace")
     cur = conn.cursor()
-    cur.execute("SELECT timestamp, account_email FROM request_logs WHERE ${condition} ORDER BY timestamp ASC", (ts,))
+    if model:
+        cur.execute("SELECT timestamp, account_email FROM request_logs WHERE status=429 AND timestamp>? AND model LIKE ? ORDER BY timestamp ASC", (ts, "%" + model + "%"))
+    else:
+        cur.execute("SELECT timestamp, account_email FROM request_logs WHERE status=429 AND timestamp>? ORDER BY timestamp ASC", (ts,))
     rows = cur.fetchall()
     conn.close()
     print(json.dumps(rows))
-except Exception as e:
+except Exception:
     print("[]")
 `;
     try {
-        const out = execFileSync('C:\\Python313\\python.exe', ['-c', script], { encoding: 'utf-8', timeout: 5000 });
+        const args = ['-c', script, PROXY_LOGS_DB, String(lastTs)];
+        if (modelFilter) args.push(modelFilter);
+        const out = execFileSync(python, args, { encoding: 'utf-8', timeout: 5000, shell: true });
         return JSON.parse(out.trim() || '[]');
     } catch { return []; }
 }
@@ -1194,12 +1214,10 @@ async function ensureAgRunning() {
         return 'not_found';
     }
 
-    const { spawn } = require('child_process');
+    const { spawn, execSync } = require('child_process');
     
     // Setup VBScript Stealth Mode untuk force-hide aplikasi GUI nakal
     const vbsPath = path.join(process.env.TEMP, 'run_ag.vbs');
-    const { execSync } = require('child_process');
-    const fs = require('fs');
     
     // Tulis VB script ke sistem yang memaksa argumen rahasia "0" = Completely Hidden
     fs.writeFileSync(vbsPath, `CreateObject("WScript.Shell").Run """${AG_EXE}""", 0, False`);
