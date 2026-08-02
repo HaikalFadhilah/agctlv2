@@ -1,97 +1,234 @@
-# AGCTL-v2 (Antigravity Control)
+<div align="center">
 
-**AGCTL-v2 (Antigravity Control)** adalah aplikasi **CLI Otomatisasi (Command-Line Interface)** interaktif yang di-desain khusus untuk memberdayakan dan mengelola akun, proxy, dan kuota untuk aplikasi [Antigravity Manager](https://github.com/lbjlaq/Antigravity-Manager).
+# AGCTL-v2 — Antigravity Control
 
-Script ini mampu mengambil alih manajemen _headless_ secara keseluruhan tanpa memicu gangguan Jendela GUI pada sistem operasimu, membuatnya 100% _Ninja mode_/tersembunyi dalam menjalankan pembaruan *state*, OAuth konsent, dan penguraian kendali Proxy layaknya **Daemon**.
+**CLI otomatisasi untuk mengelola akun, proxy, dan kuota [Antigravity Manager](https://github.com/lbjarq/Antigravity-Manager)**
 
----
+[![Node.js](https://img.shields.io/badge/Node.js-21+-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey?style=flat-square)](#prasyarat)
+[![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 
-## ⚡ Fitur Utama
-
-1. **Tambahkan Akun Google Skala Penuh (Headless Concurrency)**
-   Menambahkan ratusan email dan kata sandi baru untuk aplikasi Antigravity melalui OAuth 2.0.
-   * ✅ **Fully Headless:** Menggunakan Puppeteer siluman (`headless: 'shell'`) tanpa sedikitpun memunculkan *pop up window browser*.
-   * ✅ **Multi-threading/Concurrency Worker:** Ingin mengunyah 10 akun sekaligus? Tinggal tentukan total pekerjanya! Keamanan OAuth tetap terpisahkan secara mandiri di masing-masing *Localhost port*.
-   * ✅ **Bypass Bot Google:** Secara otomatis menyembunyikan flag "Automation" menggunakan User-Agent normal Desktop (Chrome 122).
-2. **Auto Refresh Tokens Siluman (Stealth Hot Reload)**
-   Setelah memperbarui kuncian JSON, kamu tidak perlu capek-capek memuat ulang GUI AG Tools-mu. Proses Restart AG Tools akan dijalankan ke *background* via intervensi memori `VBScript Stealth Mode` secara gaib *(Jendelanya tidak akan lompat menutupi layarmu)*.
-3. **Pembersih Sampah Pintar (Auto Delete 429)**
-   Mengendus _Database logs_ SQLite buatan AG Tools secara langsung. Skrip akan memisahkan, menghitung, dan menghapus permanen identitas akun yang dilaporkan terkena status `Error 429` (Limit harian habis).
-4. **Proteksi Proxy Pintar (Auto-Disable Proxy)**
-   Bosan proxy-nya terkuras oleh _request error_ dari model yang salah? Fitur ini akan otomatis memeriksa rasio *Error 429* untuk _Filter Model AI_ (misal: "Gemini", "Claude"). Jika ditemukan, Proxy terhadap akun yang bersangkutan otomatis diputus *(disable\_proxy: true)*.
-5. **Pemulihan Massal Akun (Auto-Enable Proxy)**
-   Membersihkan parameter `proxy_disabled` serta `disabled` ke status bersih dari seluruh UUID _cache json_ dalam satu ketukan terminal.
-6. **Murni Lokal**
-   Segala bentuk injeksi *JSON/Data Base* ditempatkan pada `%LOCALAPPDATA%\Antigravity Tools`.
+</div>
 
 ---
 
-## 🚀 Instalasi & Persiapan
+## Daftar Isi
 
-1. Pastikan Anda memiliki **Node.js** (v21+ disarankan) yang terinstal di komputer.
-2. Clone repository ini:
-   ```bash
-   git clone https://github.com/HaikalFadhilah/agctlv2.git
-   cd agctlv2
-   ```
-3. Lakukan instalasi pada seluruh dependensinya:
-   ```bash
-   npm install puppeteer
-   ```
-4. Buat file `akun.txt` tepat di direktori ini untuk injeksi massal (Format isi data biasanya adalah `email:password` atau `email|password` per-baris). 
-   *(Contoh isi `akun.txt`:)*
-   ```text
-   zoro123@email.com:rahasia123
-   sanji.blackleg@domain.com|password456
-   ```
+- [Fitur](#fitur)
+- [Prasyarat](#prasyarat)
+- [Instalasi](#instalasi)
+- [Format akun.txt](#format-akuntxt)
+- [Penggunaan](#penggunaan)
+- [Menu CLI](#menu-cli)
+- [Mekanisme Stealth](#mekanisme-stealth)
+- [Environment Variables](#environment-variables)
+- [Struktur Project](#struktur-project)
+- [Keamanan](#keamanan)
+- [Disclaimer](#disclaimer)
 
 ---
 
-## 🎮 Panduan Penggunaan
+## Fitur
 
-Hanya terdapat 1 pintu masuk, eksekusi perintah di bawah ini dari CMD/PowerShell:
+| # | Fitur | Keterangan |
+|---|-------|------------|
+| 1 | **Tambah Akun** | OAuth Google headless via Puppeteer dengan concurrent worker — tambah ratusan akun sekaligus |
+| 2 | **List Akun** | Tampilkan semua akun dengan status (`ACTIVE` / `DISABLED` / `PROXY OFF`) |
+| 3 | **Hapus Akun** | Per nomor, multi-select (pisah koma), atau hapus semua dengan konfirmasi |
+| 4 | **Lihat Kuota** | Progress bar visual per bucket langsung dari JSON AG Manager |
+| 5 | **Auto Delete Expired** | Validasi refresh token ke Google; hapus akun yang token-nya tidak valid |
+| 6 | **Auto Delete 429** | Monitor `proxy_logs.db` setiap 5 detik — hapus akun yang kena `QuotaExhausted` |
+| 7 | **Auto Enable Proxy** | Reset `proxy_disabled` ke `false` untuk semua akun dalam satu klik |
+| 8 | **Auto Disable Proxy 429** | Monitor 429 dengan filter model AI (misal: "claude", "gpt") — disable proxy otomatis |
+| 9 | **Refresh All Accounts** | Refresh token semua akun secara batch (10 sekaligus) + restart stealth AG Manager |
+
+---
+
+## Prasyarat
+
+- **Node.js** v21+ (disarankan)
+- **Google Chrome** atau **Chromium** (untuk Puppeteer OAuth)
+- **Python** (untuk fitur Auto Delete 429 dan Auto Disable Proxy — baca SQLite)
+- OS: Windows x64 (utama) · Linux x64 (didukung dengan batasan)
+
+---
+
+## Instalasi
+
+```bash
+git clone https://github.com/HaikalFadhilah/agctlv2.git
+cd agctlv2
+npm install
+```
+
+### Linux tambahan
+
+Pastikan Chromium terinstal dan ada di path standar, atau set env var:
+
+```bash
+export PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+```
+
+---
+
+## Format akun.txt
+
+Buat file `akun.txt` di folder yang sama dengan `manage.js`. Satu akun per baris:
+
+```
+email@domain.com:password
+email@domain.com|password
+email@domain.com,password
+```
+
+**Contoh:**
+
+```
+user1@gmail.com:passwordku123
+user2@gmail.com|passwordlain456
+```
+
+> **Catatan:** File `akun.txt` tidak di-commit ke Git (sudah ada di `.gitignore`).
+
+---
+
+## Penggunaan
 
 ```bash
 node manage.js
 ```
 
-### 💻 Tampilan Interaktif (CLI Menu)
+---
 
-Begitu dijalankan, kamu akan disambut dengan CLI Control Panel keren ala terminal *hacker* seperti di bawah ini, cukup tekan angkanya untuk mengeksekusi kendali!
+## Menu CLI
 
 ```text
   █████╗  ██████╗  ██████╗████████╗██╗     
  ██╔══██╗██╔════╝ ██╔════╝╚══██╔══╝██║     
  ███████║██║  ███╗██║        ██║   ██║     
  ██╔══██║██║   ██║██║        ██║   ██║     
- ██║  ██║╚██████╔╝╚██████╗   ██║   ███████╗
- ╚═╝  ╚═╝ ╚═════╝  ╚═════╝   ╚═╝   ╚══════╝ 
-               ANTIGRAVITY TOOLS MANAGER V2
+ ██║  ██║╚██████╔╝╚██████╗    ██║   ███████╗
+ ╚═╝  ╚═╝ ╚═════╝  ╚═════╝    ╚═╝   ╚══════╝
+              v2.0  —  by CROPz
 ──────────────────────────────────────────────
 
   1.  TAMBAH AKUN BARU
   2.  LIST SEMUA AKUN
   3.  HAPUS AKUN
-  4.  AUTO DELETE EXPIRED
-  5.  AUTO DELETE 429: [ OFF ]
-  6.  AUTO ENABLE PROXY
-  7.  AUTO DISABLE PROXY 429: [ OFF ]
-  8.  REFRESH ALL ACCOUNTS
+  4.  LIHAT KUOTA
+  5.  AUTO DELETE EXPIRED
+  6.  AUTO DELETE 429: [ OFF ]
+  7.  AUTO ENABLE PROXY
+  8.  AUTO DISABLE PROXY 429: [ OFF ]
+  9.  REFRESH ALL ACCOUNTS
   0.  KELUAR
 
   Pilih menu: _
 ```
 
-### 🔧 Mekanisme Stealth (Anti-Pop Up)
-Aplikasi ini sudah dipatenkan memiliki tingkat invasi layar 0%. 
-Jika kalian mengeksekusi Menu `[1] ADD ACCOUNT` atau `[8] REFRESH ALL ACCOUNTS`:
-1. *Browser Puppeteer* berwujud 100% konsol murni.
-2. Saat penyimpanan terselesaikan, fitur OS di Windows sangat bandel menampilkan layar UI Antigravity Tools saat di _restart_. **Ini sudah ditangani!** 
-Skrip otomatis menyuntikkan `.vbs` temporer rahasia (Windows Script Host) dan menjalankan Antigravity Tools beserta *Arg 0* (`Completely Hidden`), membunuh kemungkinan render *window graphic* tanpa sepengetahuan OS. Sangat aman dan tenteram digunakan sambil bermain *Game Full-screen* atau menatap Visual Studio Code.  
+### Menu 1 — Tambah Akun
 
-## 🛡️ Disclaimer Privasi 
-Script ini menggunakan konfigurasi *OAuth Consent* dari Aplikasi GCP tersendiri untuk menjembatani komunikasi ke Token Google secara absolut. 
-Pengaturan tingkat keamanan `Stealth Mode` bisa terdeteksi pada *Windows Defender* khusus fitur VBS-nya karena perilakunya yang nyaris tak kasat mata (seperti *backdoor*). Beri pengecualian *Allowed* (Ignore) apabila terminal CLI-mu ditahan oleh Antivirus *(False Positives)*.
+- Membaca semua baris dari `akun.txt`
+- Membuka Puppeteer headless untuk setiap akun (concurrent worker)
+- OAuth Google dilakukan secara otomatis dengan validasi `state` (anti-CSRF)
+- Akun yang berhasil **dihapus otomatis** dari `akun.txt`
+- Setelah selesai, token di-refresh otomatis agar langsung tersinkronisasi
+
+### Menu 4 — Lihat Kuota
+
+Menampilkan progress bar kuota per bucket setiap akun:
+
+```
+  1. user@gmail.com ← AKTIF
+       Last update: 02/08/26 14.30 (5 menit lalu)
+
+       Bucket A                       ████████░░░░░░░░░░░░  40%
+       Bucket B                       ████░░░░░░░░░░░░░░░░  20%
+```
+
+### Menu 6 & 8 — Auto Delete 429 / Auto Disable Proxy
+
+Monitor background yang membaca `proxy_logs.db` (SQLite) setiap 5 detik:
+
+- **Auto Delete 429**: Akun yang kena `429 QuotaExhausted` dihapus permanen
+- **Auto Disable Proxy 429**: Proxy akun yang kena 429 di-disable (bisa filter per model AI)
+- Status ON/OFF tersimpan di `auto429.json` / `autodisableproxy.json`
+- Berjalan sebagai `setInterval` — tidak memblokir menu utama
 
 ---
-_AGCTL-v2 - Antigravity Control Automate Everything._
+
+## Mekanisme Stealth
+
+Saat menjalankan Menu 1 atau Menu 9 di Windows:
+
+1. **Puppeteer headless** — browser 100% tidak terlihat di layar
+2. **VBScript stealth restart** — setelah token di-refresh, AG Manager di-restart via `.vbs` temporer dengan argumen `0` (Completely Hidden), sehingga tidak ada pop-up GUI yang muncul
+
+> Pada Linux, fitur stealth restart dilewati (Windows-only). AG Manager harus di-restart manual.
+
+---
+
+## Environment Variables
+
+Semua opsional. Jika tidak diset, nilai default dari kode digunakan.
+
+| Variable | Deskripsi | Default |
+|----------|-----------|---------|
+| `AGCTL_CLIENT_ID` | Google OAuth Client ID | Hardcoded di `lib/credentials.js` |
+| `AGCTL_CLIENT_SECRET` | Google OAuth Client Secret | Hardcoded di `lib/credentials.js` |
+| `PUPPETEER_EXECUTABLE_PATH` | Path browser untuk Puppeteer | Auto-detect di Linux |
+| `AG_TOOLS_DIR` | Direktori data AG Manager | `~/.antigravity_tools` |
+
+Salin `.env.example` ke `.env` untuk kustomisasi.
+
+---
+
+## Struktur Project
+
+```
+agctlv2/
+├── manage.js              # Entry point — menu CLI dan orchestration
+├── lib/
+│   ├── platform.js        # Runtime adapter: paths, browser, process, python
+│   ├── credentials.js     # OAuth credentials + device profile (env vars support)
+│   ├── store.js           # AccountStore: atomic write, load/save index & akun
+│   ├── oauth.js           # OAuth flow: callback server, token exchange, refresh
+│   ├── monitor.js         # 429 monitor: polling SQLite, delete/disable callback
+│   └── ui.js              # CLI helpers: logging, formatting, readline
+├── package.json
+├── .env.example           # Template environment variables
+├── .gitignore
+├── AGENTS.md              # Panduan AI agent
+├── CLAUDE.md              # Quick reference Claude Code
+├── akun.txt               # Input akun (TIDAK di-commit)
+├── auto429.json           # State monitor (TIDAK di-commit)
+└── autodisableproxy.json  # State monitor (TIDAK di-commit)
+```
+
+---
+
+## Keamanan
+
+- **OAuth state validation**: Callback server memvalidasi `state` parameter untuk mencegah CSRF
+- **Atomic file write**: Penulisan `accounts.json` dan file akun menggunakan pattern write-tmp + rename
+- **Parameterized SQL**: Query SQLite menggunakan placeholder `?`, bukan string interpolation
+- **No hardcoded Python path**: Deteksi dinamis (`python` → `python3` → `py`)
+- **Platform guards**: Semua Windows-only API di-guard dengan `IS_WIN`
+- **Graceful shutdown**: Ctrl+C menghentikan semua monitor sebelum exit
+- **Credentials via env vars**: `CLIENT_ID` dan `CLIENT_SECRET` bisa di-override via environment
+
+> **Tips:** Jangan commit `akun.txt`, `auto429.json`, atau `autodisableproxy.json` — sudah ada di `.gitignore`.
+
+---
+
+## Disclaimer
+
+Script ini menggunakan OAuth Consent dari aplikasi GCP tersendiri. Fitur VBScript stealth mode di Windows mungkin terdeteksi sebagai false positive oleh antivirus. Beri pengecualian jika diperlukan.
+
+---
+
+<div align="center">
+
+Dibuat oleh **[HaikalFadhilah (CROPz)](https://github.com/HaikalFadhilah)**
+
+</div>

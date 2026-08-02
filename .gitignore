@@ -1,0 +1,6 @@
+node_modules/
+akun.txt
+auto429.json
+autodisableproxy.json
+*.log
+.env
