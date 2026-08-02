@@ -12,7 +12,7 @@
 - **Runtime**: Node.js v21+ disarankan
 - **Dependency utama**: `puppeteer`
 - **Entry point**: `manage.js`
-- **Platform utama**: Windows (dukungan Linux sedang dalam pengembangan)
+- **Platform**: Windows (utama) · Linux (didukung dengan batasan)
 
 ## Menjalankan
 
@@ -25,45 +25,84 @@ node manage.js
 
 ```
 agctlv2/
-├── manage.js              # Source code utama (semua logika ada di sini)
-├── package.json           # NPM manifest
-├── .gitignore             # node_modules, akun.txt, state JSON, log
-├── AGENTS.md              # Instruksi untuk AI agent
-├── CLAUDE.md              # Quick reference untuk Claude Code
-├── akun.txt               # File input akun (TIDAK di-commit)
-├── auto429.json           # State Auto Delete 429 (TIDAK di-commit)
-├── autodisableproxy.json  # State Auto Disable Proxy (TIDAK di-commit)
-└── README.md
+├── manage.js              # Entry point — menu CLI dan orchestration
+├── lib/
+│   ├── platform.js        # Runtime adapter: paths, browser, process, python
+│   ├── credentials.js     # OAuth credentials + device profile (env vars support)
+│   ├── store.js           # AccountStore: atomic write, load/save index & akun
+│   ├── oauth.js           # OAuth flow: callback server, token exchange, refresh
+│   ├── monitor.js         # 429 monitor: polling SQLite, delete/disable callback
+│   └── ui.js              # CLI helpers: logging, formatting, readline
+├── package.json
+├── .env.example           # Template env vars
+├── .gitignore
+├── akun.txt               # Input akun (TIDAK di-commit)
+├── auto429.json           # State monitor (TIDAK di-commit)
+└── autodisableproxy.json  # State monitor (TIDAK di-commit)
 ```
+
+## Dependency Graph
+
+```
+manage.js
+├── lib/platform.js     (mandiri)
+├── lib/credentials.js  (mandiri)
+├── lib/store.js        → platform.js
+├── lib/oauth.js        → credentials.js, store.js
+├── lib/monitor.js      → platform.js, store.js
+└── lib/ui.js           (mandiri)
+```
+
+Tidak ada circular dependency.
 
 ## Konvensi Kode
 
 - **Module system**: CommonJS (`require`), bukan ESM.
 - **Style**: 4-space indent, single quotes.
-- **Logging**: Gunakan helper `logInfo`, `logOk`, `logWarn`, `logError` yang sudah ada.
+- **Logging**: Gunakan helper dari `lib/ui.js`: `logInfo`, `logOk`, `logWarn`, `logBlank`.
 - **Komentar**: Bahasa Indonesia, jelaskan "kenapa" bukan "apa".
-- **Tidak ada comments yang tidak perlu** — kode harus self-documenting.
+- **Tidak ada comments yang tidak pernah** — kode harus self-documenting.
+- **Error handling**: Jangan pakai bare `catch {}` — selalu log atau beri komentar kenapa diabaikan.
+
+## Modul
+
+### `lib/platform.js`
+Path dan runtime adapter. Semua akses ke `process.env`, `os.homedir()`, deteksi browser, deteksi Python, dan Windows process management (`tasklist`, `taskkill`) harus lewat modul ini.
+
+### `lib/credentials.js`
+OAuth credentials. Bisa di-override via env vars (`AGCTL_CLIENT_ID`, `AGCTL_CLIENT_SECRET`). Jangan hardcode credentials baru.
+
+### `lib/store.js`
+AccountStore. Semua baca/tulis `accounts.json` dan file akun UUID lewat modul ini. Menggunakan atomic write (write-tmp + rename).
+
+### `lib/oauth.js`
+OAuth flow: callback server (dengan state validation), token exchange, token refresh, JWT decode. Jangan tulis HTTP request ke Google langsung di `manage.js` — gunakan modul ini.
+
+### `lib/monitor.js`
+429 monitor. Pola callback: `createDeleteMonitor(model)` / `createDisableProxyMonitor(model)` return object dengan `.start()`, `.stop()`, `.isActive()`.
+
+### `lib/ui.js`
+UI helpers. `rl`, `ask`, `clear`, logging, formatting. Jangan buat `readline` baru di modul lain.
 
 ## Hal Penting yang Harus Diperhatikan
 
 ### Security
-- **Jangan hardcode credentials** — `CLIENT_ID` dan `CLIENT_SECRET` sudah ada di kode (milik upstream), jangan tambah yang baru.
-- **Jangan commit** `akun.txt`, `auto429.json`, `autodisableproxy.json` — sudah ada di `.gitignore`.
-- **SQL injection**: Selalu gunakan parameterized query untuk SQLite, jangan string interpolation.
+- **OAuth state validation**: Callback server memvalidasi `state` parameter.
+- **SQL injection**: `lib/monitor.js` menggunakan parameterized query.
+- **Atomic write**: `lib/store.js` menggunakan write-tmp + rename.
+- **Jangan commit** `akun.txt`, `auto429.json`, `autodisableproxy.json`.
 
 ### Platform Compatibility
-- Banyak fitur Windows-only (`tasklist`, `taskkill`, VBScript stealth, `LOCALAPPDATA`).
-- Selalu gunakan `process.platform` guard sebelum memanggil Windows API.
-- Path home direktori sudah menggunakan fallback: `USERPROFILE || HOME || os.homedir()`.
+- Semua Windows-only API di-guard dengan `IS_WIN` dari `lib/platform.js`.
+- Jangan akses `process.env.TEMP` atau `process.env.LOCALAPPDATA` langsung — gunakan `getTempDir()` / `LOCAL_APP_DATA`.
 
 ### Puppeteer
-- Browser path di Linux: gunakan env `PUPPETEER_EXECUTABLE_PATH` atau deteksi `/usr/bin/chromium`.
-- Headless mode: `'shell'` untuk menghindari deteksi bot.
-- Setiap worker OAuth **wajib** pakai port unik via `findFreePort()`.
+- Browser path: `getBrowserPath()` dari `lib/platform.js`.
+- Headless mode: `'shell'`.
+- Setiap worker OAuth wajib pakai port unik via `findFreePort()` dari `lib/oauth.js`.
 
-### Python Dependency
-- Fitur Auto Delete 429 dan Auto Disable Proxy butuh Python untuk baca SQLite.
-- Deteksi python sekarang dinamis (`python` → `python3` → `py`).
+### Python
+- Deteksi via `findPython()` dari `lib/platform.js`.
 - Script Python menerima argumen via `sys.argv`, bukan string interpolation.
 
 ## Testing
@@ -71,13 +110,14 @@ agctlv2/
 Belum ada test framework. Validasi manual:
 
 ```bash
-node --check manage.js     # syntax check
-node manage.js             # jalankan dan cek menu
+node --check manage.js          # syntax check
+node --check lib/*.js           # syntax check semua modul
+node manage.js                  # jalankan dan cek menu
 ```
 
 ## Git Workflow
 
-- **Branch naming**: `fix/deskripsi` atau `feat/deskripsi`.
+- **Branch naming**: `fix/deskripsi`, `feat/deskripsi`, `refactor/deskripsi`.
 - **Conventional commits**: `fix:`, `feat:`, `docs:`, `chore:`, `refactor:`.
 - **Jangan push langsung ke `main`**.
 - PR ke `HaikalFadhilah/agctlv2` (upstream) dari fork.

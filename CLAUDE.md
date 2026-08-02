@@ -4,25 +4,40 @@
 
 ## Apa ini
 
-CLI otomatisasi Node.js untuk Antigravity Manager. Satu file utama: `manage.js` (~1300 baris). Pakai Puppeteer untuk OAuth Google headless, baca/tulis JSON akun lokal, dan monitor SQLite `proxy_logs.db` untuk deteksi 429.
+CLI otomatisasi Node.js untuk Antigravity Manager. Entry point: `manage.js` (~650 baris). Logic dipecah ke modul `lib/`.
 
 ## Quick Start
 
 ```bash
-npm install        # install puppeteer
-node manage.js     # jalankan CLI
+npm install
+node manage.js
 ```
 
-## Yang Harus Diketahui
+## Struktur Modul
 
-- **Satu file monolith**: semua logika ada di `manage.js`. Tidak ada modul terpisah.
-- **CommonJS**: pakai `require`, bukan `import`.
-- **Windows-first**: banyak fitur Windows-only. Selalu cek `process.platform` sebelum panggil Windows API (`tasklist`, `taskkill`, VBScript, `LOCALAPPDATA`).
-- **Path runtime**: `HOME_DIR` = `USERPROFILE || HOME || os.homedir()`. `AG_DIR` = `AG_TOOLS_DIR env || ~/.antigravity_tools`.
-- **Puppeteer**: Linux butuh `PUPPETEER_EXECUTABLE_PATH` atau Chromium di path standar. Mode `headless: 'shell'`.
-- **Python**: fitur 429 butuh Python terinstal. Deteksi dinamis: `python` → `python3` → `py`.
-- **State files**: `auto429.json`, `autodisableproxy.json` — tidak di-commit (ada di `.gitignore`).
-- **`akun.txt`**: file input akun, format `email:password` atau `email|password`. Tidak di-commit.
+| File | Tugas |
+|------|-------|
+| `manage.js` | Menu CLI, orchestration, fitur utama |
+| `lib/platform.js` | Paths, browser, Python, process management (IS_WIN guard) |
+| `lib/credentials.js` | OAuth credentials (env vars + fallback) |
+| `lib/store.js` | AccountStore — atomic write, load/save index & akun |
+| `lib/oauth.js` | OAuth callback server, token exchange/refresh, JWT decode |
+| `lib/monitor.js` | 429 monitor — polling SQLite, callback pattern |
+| `lib/ui.js` | Logging, readline, formatting helpers |
+
+Dependency graph: `manage.js → semua lib/`. Tidak ada circular dependency.
+
+## Aturan
+
+- **CommonJS** (`require`), bukan ESM.
+- Akses `process.env`, `tasklist`, `taskkill`, Python detection — **wajib lewat `lib/platform.js`**.
+- Baca/tulis `accounts.json` dan file akun — **wajib lewat `lib/store.js`**.
+- HTTP request ke Google OAuth — **wajib lewat `lib/oauth.js`**.
+- Logging — **wajib pakai `lib/ui.js`** helpers (`logInfo`, `logOk`, `logWarn`).
+- Jangan buat `readline` baru di modul lain — pakai `rl` dari `lib/ui.js`.
+- SQL: selalu parameterized query.
+- Error handling: jangan bare `catch {}` — log atau beri komentar.
+- Windows-only API: guard dengan `IS_WIN` dari `lib/platform.js`.
 
 ## Menu CLI
 
@@ -31,19 +46,16 @@ node manage.js     # jalankan CLI
 3. Hapus Akun
 4. Lihat Kuota (progress bar per bucket)
 5. Auto Delete Expired (validasi refresh token)
-6. Auto Delete 429 (monitor SQLite, toggle on/off)
-7. Auto Enable Proxy (reset semua proxy_disabled)
-8. Auto Disable Proxy 429 (monitor + disable proxy, filter model)
-9. Refresh All Accounts (refresh token batch)
+6. Auto Delete 429 (monitor SQLite, toggle)
+7. Auto Enable Proxy
+8. Auto Disable Proxy 429 (monitor + filter model)
+9. Refresh All Accounts (batch refresh + stealth restart)
 
-## Aturan Edit
+## Validasi
 
-- Jangan pecah ke multi-file kecuali diminta.
-- Ikuti style yang ada: 4-space indent, single quotes, komentar Bahasa Indonesia.
-- Logging pakai helper yang sudah ada: `logInfo`, `logOk`, `logWarn`, `logError`.
-- Jangan hardcode path Python atau path browser.
-- SQL: selalu parameterized query.
-- Validasi: `node --check manage.js` setelah edit.
+```bash
+node --check manage.js && node --check lib/*.js
+```
 
 ## Git
 
