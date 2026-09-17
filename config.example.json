@@ -1,0 +1,12 @@
+{
+  "_comment": "Salin file ini menjadi config.json lalu sesuaikan untuk device ini. Semua field OPSIONAL -- kosongkan/kurangi kalau pakai path default.",
+  "agDir": "C:\\Users\\NAMA_USER\\.antigravity_tools",
+  "agExe": "C:\\Users\\NAMA_USER\\AppData\\Local\\Antigravity Tools\\antigravity_tools.exe",
+  "deviceProfile": {
+    "_comment": "Isi dari Antigravity Tools di device ini. Kalau diisi, ovveride identitas default.",
+    "machine_id": "auth0|user_xxxxxxxxxxxxxxxxxxxxxx",
+    "mac_machine_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+    "dev_device_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+    "sqm_id": "{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}"
+  }
+}

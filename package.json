@@ -1,0 +1,18 @@
+{
+  "name": "agctl-v2",
+  "version": "2.1.0",
+  "description": "AGCTL-v2 (Antigravity Control) -- CLI otomatisasi untuk mengelola akun, proxy, dan kuota Antigravity Manager",
+  "main": "manage.js",
+  "scripts": {
+    "start": "node manage.js",
+    "check": "node --check manage.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "puppeteer": "^25.3.0"
+  },
+  "license": "MIT",
+  "private": true
+}

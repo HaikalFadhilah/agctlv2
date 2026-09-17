@@ -1,0 +1,4 @@
+# Format: email:password ATAU email|password, satu akun per baris.
+# Salin menjadi akun.txt lalu isi dengan akun kamu.
+zoro123@email.com:rahasia123
+sanji.blackleg@domain.com|password456

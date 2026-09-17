@@ -1,11 +1,14 @@
-const puppeteer = require('puppeteer');
+﻿const puppeteer = require('puppeteer');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const https = require('https');
+const http = require('http');
 const readline = require('readline');
+const { execSync, execFileSync } = require('child_process');
 const { randomUUID } = require('crypto');
 
-// ── Konstanta ─────────────────────────────────────────────────────────────────
+// â”€â”€ Konstanta â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const CLIENT_ID     = '1071' + '006' + '060' + '591' + '-tmh' + 'ssin' + '2h2' + '1lcr' + 'e23' + '5vtol' + 'ojh' + '4g40' + '3ep.a' + 'pps.go' + 'ogleuse' + 'rcon' + 'tent.c' + 'om';
 const CLIENT_SECRET = 'GOC' + 'SPX-' + 'K58' + 'FWR4' + '86L' + 'dLJ' + '1mLB' + '8sXC' + '4z6q' + 'DAf';
@@ -18,9 +21,9 @@ const SCOPES        = [
     'https://www.googleapis.com/auth/experimentsandconfigs'
 ].join(' ');
 
-const AG_DIR        = path.join(process.env.USERPROFILE, '.antigravity_tools');
-const ACCOUNTS_DIR  = path.join(AG_DIR, 'accounts');
-const ACCOUNTS_INDEX = path.join(AG_DIR, 'accounts.json');
+let AG_DIR        = path.join(process.env.USERPROFILE || os.homedir(), '.antigravity_tools');
+let ACCOUNTS_DIR  = path.join(AG_DIR, 'accounts');
+let ACCOUNTS_INDEX = path.join(AG_DIR, 'accounts.json');
 
 const DEVICE_PROFILE = {
     machine_id:     'auth0|user_kfwllyifh6pb38vn8roj1gormxlxmwmo',
@@ -29,25 +32,44 @@ const DEVICE_PROFILE = {
     sqm_id:         '{D18262FE-D3E8-47AC-B703-E0E45A3A20DA}'
 };
 
-// ── Logging rapi ──────────────────────────────────────────────────────────────
+let AG_MANAGER_EXE = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Antigravity Tools', 'antigravity_tools.exe');
+
+// â”€â”€ Konfigurasi portabel (opsional config.json) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Supaya script bisa dijalankan di semua device, path & identitas device bisa
+// di-override lewat file config.json di folder proyek (lihat config.example.json).
+const CONFIG_FILE = path.join(__dirname, 'config.json');
+let CFG = {};
+try { CFG = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8')); } catch (e) {
+    if (e.code !== 'ENOENT') console.warn('[config] config.json korup, abaikan:', e.message);
+}
+
+if (CFG.agDir)  { const p = path.resolve(CFG.agDir);  AG_DIR = p; ACCOUNTS_DIR = path.join(p, 'accounts'); ACCOUNTS_INDEX = path.join(p, 'accounts.json'); }
+if (CFG.agExe)  { AG_MANAGER_EXE = path.resolve(CFG.agExe); }
+if (CFG.deviceProfile && typeof CFG.deviceProfile === 'object') {
+    DEVICE_PROFILE.machine_id     = CFG.deviceProfile.machine_id     || DEVICE_PROFILE.machine_id;
+    DEVICE_PROFILE.mac_machine_id = CFG.deviceProfile.mac_machine_id || DEVICE_PROFILE.mac_machine_id;
+    DEVICE_PROFILE.dev_device_id  = CFG.deviceProfile.dev_device_id  || DEVICE_PROFILE.dev_device_id;
+    DEVICE_PROFILE.sqm_id         = CFG.deviceProfile.sqm_id         || DEVICE_PROFILE.sqm_id;
+}
+
+// â”€â”€ Logging rapi â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const LOG_WIDTH = 46;
 
-function logLine(char = '─') { console.log('  ' + char.repeat(LOG_WIDTH)); }
+function logLine(char = 'â”€') { console.log('  ' + char.repeat(LOG_WIDTH)); }
 
 function logStep(icon, msg) {
     const ts = new Date().toLocaleTimeString('id-ID', { hour12: false });
     console.log(`  ${icon} [${ts}] ${msg}`);
 }
 
-function logInfo(msg)    { logStep('◆', msg); }
-function logOk(msg)      { logStep('✔', msg); }
+function logInfo(msg)    { logStep('â—†', msg); }
+function logOk(msg)      { logStep('âœ”', msg); }
 function logWarn(msg)    { logStep('!', msg); }
-function logError(msg)   { logStep('✘', msg); }
-function logClick(msg)   { logStep('↵', msg); }
+function logError(msg)   { logStep('âœ˜', msg); }
 function logBlank()      { console.log(''); }
 
-// ── Helpers umum ──────────────────────────────────────────────────────────────
+// â”€â”€ Helpers umum â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const delay = (ms) => new Promise(r => setTimeout(r, ms));
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -65,7 +87,7 @@ function statusBadge(account) {
     return 'ACTIVE    ';
 }
 
-// ── File helpers ──────────────────────────────────────────────────────────────
+// â”€â”€ File helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function loadIndex() {
     if (!fs.existsSync(ACCOUNTS_INDEX))
@@ -83,35 +105,101 @@ function loadAccountFile(id) {
     return JSON.parse(fs.readFileSync(file, 'utf-8'));
 }
 
-function saveAccountFile(account) {
-    fs.writeFileSync(path.join(ACCOUNTS_DIR, `${account.id}.json`), JSON.stringify(account, null, 2));
-}
+// â”€â”€ OAuth helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-// ── OAuth helpers ─────────────────────────────────────────────────────────────
-
-function findFreePort() {
-    const net = require('net');
-    return new Promise((resolve, reject) => {
-        const srv = net.createServer();
-        srv.listen(0, '127.0.0.1', () => { const p = srv.address().port; srv.close(() => resolve(p)); });
-        srv.on('error', reject);
+// Bind callback server SEKALI (port 0 = OS yg pilih) â†’ tanpa race-condition EADDRINUSE
+// antar worker concurrent. Mengembalikan { port, callbackPromise }.
+function startCallbackServer() {
+    const server = http.createServer((req, res) => {
+        const port = server.address().port;
+        const url  = new URL(req.url, `http://localhost:${port}`);
+        const code = url.searchParams.get('code');
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end('<html><body><h2>Login berhasil! Kamu bisa tutup tab ini.</h2></body></html>');
+        setTimeout(() => server.close(), 500);
+        resolveCallback({ code, redirectUri: `http://localhost:${port}/oauth-callback` });
     });
-}
 
-function startCallbackServer(port) {
-    const http = require('http');
+    let resolveCallback;
+    const callbackPromise = new Promise(res => { resolveCallback = res; });
+
     return new Promise((resolve, reject) => {
-        const server = http.createServer((req, res) => {
-            const url  = new URL(req.url, `http://localhost:${port}`);
-            const code = url.searchParams.get('code');
-            res.writeHead(200, { 'Content-Type': 'text/html' });
-            res.end('<html><body><h2>Login berhasil! Kamu bisa tutup tab ini.</h2></body></html>');
-            setTimeout(() => server.close(), 500);
-            resolve({ code, redirectUri: `http://localhost:${port}/oauth-callback` });
-        });
         server.on('error', reject);
-        server.listen(port, '127.0.0.1');
+        server.listen(0, '127.0.0.1', () => {
+            resolve({ port: server.address().port, callbackPromise });
+        });
     });
+}
+
+// â”€â”€ Debug helpers (untuk menemukan akar masalah OAuth yang gagal) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+const DEBUG_DIR = path.join(__dirname, 'debug');
+
+async function captureFailedPage(page, label) {
+    try {
+        fs.mkdirSync(DEBUG_DIR, { recursive: true });
+        const safe = label.replace(/[^a-z0-9@.\-]/gi, '_');
+        const ts   = new Date().toISOString().replace(/[:.]/g, '-');
+        const info = await page.evaluate(() => ({
+            url:   location.href,
+            title: document.title,
+            text:  (document.body ? document.body.innerText : '').slice(0, 800)
+        })).catch(() => ({ url: '?', title: '?', text: '' }));
+        fs.writeFileSync(path.join(DEBUG_DIR, `${safe}_${ts}.txt`),
+            `URL   : ${info.url}\nTITLE : ${info.title}\n\n${info.text}\n`, 'utf-8');
+        await page.screenshot({ path: path.join(DEBUG_DIR, `${safe}_${ts}.png`) }).catch(() => {});
+        return info;
+    } catch { return null; }
+}
+
+// Klik tombol kata kunci via koordinat mouse CDP (trusted click, pasti diterima Google).
+// Tembus shadow DOM. Awalnya elemen diklik via el.click() (isTrusted=false) yang BISA diabaikan
+// Google; sekarang page.mouse.click() = input keyboard/mouse asli â†’ isTrusted=true.
+// Cakupan keyword termasuk halaman "nativeapp" (tombol "Login" / "Masuk") sebelum consent asli.
+async function clickConsentButton(page) {
+    const KEYWORDS = ['lanjutkan', 'lanjut', 'continue', 'berikutnya', 'selanjutnya',
+                      'izinkan', 'allow', 'setuju', 'agree', 'memahami', 'understand',
+                      'konfirmasi', 'confirm', 'next', 'yes', 'login', 'masuk',
+                      'sign in', 'iya', 'ya', 'oke', 'ok'];
+    const target = await page.evaluate((kws) => {
+        function collect(root) {
+            const matches = [];
+            for (const el of root.querySelectorAll('button, input[type="button"], input[type="submit"], [role="button"], a[role="button"]')) {
+                const text = (el.innerText || el.textContent || el.value || el.getAttribute('aria-label') || '').trim();
+                if (!text) continue;
+                const lower = text.toLowerCase();
+                if (kws.some(k => lower.includes(k))) {
+                    const r = el.getBoundingClientRect();
+                    matches.push({ text, x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width, h: r.height });
+                }
+            }
+            for (const el of root.querySelectorAll('*')) {
+                if (el.shadowRoot) matches.push(...collect(el.shadowRoot));
+            }
+            return matches;
+        }
+        const all = collect(document);
+        // Prioritas: tombol pendek (exact label seperti "Login"/"Lanjutkan") di area tengah halaman.
+        all.sort((a, b) => (a.text.length - b.text.length));
+        const vis = all.filter(m => m.w > 1 && m.h > 1 && m.y >= 0 && m.y <= innerHeight);
+        return vis[0] || all[0] || null;
+    }, KEYWORDS);
+
+    if (!target) return false;
+    await page.mouse.click(target.x, target.y);
+    return true;
+}
+
+// Deteksi halaman masalah Google yang menghalangi redirect OAuth
+async function detectGoogleError(page) {
+    const text = (await page.evaluate(() => (document.body ? document.body.innerText : '')).catch(() => '')) || '';
+    const t = text.toLowerCase();
+    if (t.includes('this browser or app may not be secure')) return { flag: 'BROWSER_BLOCKED',  msg: 'Browser terdeteksi otomatis/headless oleh Google' };
+    if (t.includes('wrong password') || t.includes("couldn't sign you in")) return { flag: 'SIGNIN_DENIED',  msg: 'Password salah / login ditolak' };
+    if (t.includes('two-step verification') || t.includes('verification code')) return { flag: 'NEEDS_2FA',      msg: 'Akun pakai 2-Step Verification' };
+    if (t.includes('confirm your recovery email')) return { flag: 'NEEDS_RECOVERY', msg: 'Google minta konfirmasi recovery email' };
+    if (t.includes("verify it's you")) return { flag: 'NEEDS_VERIFY', msg: 'Google minta verifikasi identitas (verify it\'s you)' };
+    return null;
 }
 
 function exchangeCodeForTokens(code, redirectUri) {
@@ -168,7 +256,7 @@ function saveAccountToAG(accountData) {
     return id;
 }
 
-// ── Fitur: Tambah Akun ────────────────────────────────────────────────────────
+// â”€â”€ Fitur: Tambah Akun â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function addAccounts() {
     clear();
@@ -208,7 +296,7 @@ async function addAccounts() {
     }
     logInfo(`Menggunakan ${threads} concurrency worker...`);
     logBlank();
-    logLine('─');
+    logLine('â”€');
 
     // Set berisi baris yang sudah berhasil (akan dihapus dari file)
     const successLines = new Set();
@@ -231,14 +319,14 @@ async function addAccounts() {
         const logPrefix = `[${String(indexNum).padStart(2)}/${accounts.length}] ${account.email}`;
         
         if (!account.email || !account.password) {
-            console.log(`  ${logPrefix} ✘ Gagal: Format salah, dilewati.`);
+            console.log(`  ${logPrefix} âœ˜ Gagal: Format salah, dilewati.`);
             gagal++;
             return;
         }
 
         const idx = loadIndex();
         if (idx.accounts?.some(a => a.email === account.email)) {
-            console.log(`  ${logPrefix} ⊘ Dilewati: Sudah ada di AG Manager.`);
+            console.log(`  ${logPrefix} âŠ˜ Dilewati: Sudah ada di AG Manager.`);
             successLines.add(account.raw);
             skip++;
             return;
@@ -246,11 +334,9 @@ async function addAccounts() {
 
         let browser;
         try {
-            const callbackPort  = await findFreePort(); // Pastikan tiap thread pakai port unik miliknya sendiri
+            const { port: callbackPort, callbackPromise } = await startCallbackServer(); // Bind sekali, tanpa race
             const redirectUri   = `http://localhost:${callbackPort}/oauth-callback`;
             const AUTH_URL      = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(SCOPES)}&access_type=offline&prompt=consent&include_granted_scopes=true&state=${randomUUID()}`;
-
-            const callbackPromise = startCallbackServer(callbackPort);
 
             // Headless true dengan config Chrome bot siluman ----------------
             browser = await puppeteer.launch({
@@ -263,55 +349,62 @@ async function addAccounts() {
                 ]
             });
             const page = await browser.newPage();
+
+            // Spoof petunjuk otomasi biar Google tidak tahu ini bot
+            await page.evaluateOnNewDocument(() => {
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+                Object.defineProperty(navigator, 'plugins',   { get: () => [1, 2, 3, 4, 5] });
+                window.chrome = { runtime: {} };
+            });
             
             await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
             await page.setExtraHTTPHeaders({
                 'accept-language': 'en-US,en;q=0.9'
             });
 
-            console.log(`  ${logPrefix} ◆ Membuka Google...`);
+            console.log(`  ${logPrefix} â—† Membuka Google...`);
             await page.goto(AUTH_URL, { waitUntil: 'networkidle2', timeout: 60000 });
 
             await page.waitForSelector('#identifierId', { visible: true, timeout: 30000 });
             await page.type('#identifierId', account.email, { delay: 0 });
             await page.keyboard.press('Enter');
-            console.log(`  ${logPrefix} ◆ Input Email...`);
+            console.log(`  ${logPrefix} â—† Input Email...`);
 
             await page.waitForSelector('input[name="Passwd"]', { visible: true, timeout: 30000 });
             await delay(100);
             await page.type('input[name="Passwd"]', account.password, { delay: 0 });
             await page.keyboard.press('Enter');
-            console.log(`  ${logPrefix} ◆ Input Pass...`);
+            console.log(`  ${logPrefix} â—† Input Pass...`);
 
             let redirected = false;
-            for (let w = 0; w < 40; w++) {
+            for (let w = 0; w < 45; w++) {
                 try {
                     if (page.url().includes(`localhost:${callbackPort}`)) { redirected = true; break; }
-                    
-                    const buttons = await page.$$('button, input[type="button"], input[type="submit"]');
-                    let isClicked = false;
 
-                    for (const btn of buttons) {
-                        const text = await page.evaluate(el => (el.innerText || el.textContent || el.value || '').toLowerCase().trim(), btn);
-                        const keywords = ['continue', 'lanjutkan', 'allow', 'izinkan', 'sign in', 'signin', 'next', 'yes', 'masuk', 'confirm', 'i understand', 'understand'];
-                        
-                        if (keywords.some(k => text.includes(k))) {
-                            await btn.click();
-                            isClicked = true;
-                            break;
-                        }
+                    // Cek dulu apakah Google menampilkan halaman masalah (bukan consent)
+                    const gErr = await detectGoogleError(page);
+                    if (gErr) {
+                        await captureFailedPage(page, account.email);
+                        throw new Error(`Google diblokir: ${gErr.msg} (${gErr.flag})`);
                     }
+
+                    const isClicked = await clickConsentButton(page);
 
                     if (isClicked) await delay(2000); 
                     else await delay(500);
                 } catch (e) {
+                    if (e.message && e.message.includes('Google diblokir')) throw e;
                     await delay(500);
                 }
             }
 
-            if (!redirected) throw new Error('Timeout menunggu redirect OAuth');
+            if (!redirected) {
+                const dbg = await captureFailedPage(page, account.email);
+                throw new Error(`Timeout menunggu redirect OAuth${dbg ? `. Bukti disimpan di debug/ (URL: ${dbg.url})` : ''}`);
+            }
 
-            console.log(`  ${logPrefix} ◆ Menukar Kode OAuth...`);
+            console.log(`  ${logPrefix} â—† Menukar Kode OAuth...`);
             const { code, redirectUri: actualUri } = await Promise.race([
                 callbackPromise,
                 new Promise((_, rej) => setTimeout(() => rej(new Error('Callback timeout')), 15000))
@@ -327,12 +420,12 @@ async function addAccounts() {
 
             saveAccountToAG({ email, name, access_token: tokens.access_token, refresh_token: tokens.refresh_token, expires_in: tokens.expires_in, id_token: tokens.id_token });
 
-            console.log(`  ${logPrefix} ✔ BERHASIL!`);
+            console.log(`  ${logPrefix} âœ” BERHASIL!`);
             successLines.add(account.raw);
             sukses++;
 
         } catch (err) {
-            console.log(`  ${logPrefix} ✘ GAGAL: ${err.message}`);
+            console.log(`  ${logPrefix} âœ˜ GAGAL: ${err.message}`);
             gagal++;
             try { await browser?.close(); } catch {}
         }
@@ -351,7 +444,7 @@ async function addAccounts() {
     }
 
     logLine();
-    console.log(`  SELESAI  ✔ ${sukses} berhasil  |  ✘ ${gagal} gagal  |  ⊘ ${skip} dilewati`);
+    console.log(`  SELESAI  âœ” ${sukses} berhasil  |  âœ˜ ${gagal} gagal  |  âŠ˜ ${skip} dilewati`);
     logLine();
 
     if (sukses > 0) {
@@ -370,7 +463,7 @@ async function addAccounts() {
     logBlank();
 }
 
-// ── Fitur: List Akun ──────────────────────────────────────────────────────────
+// â”€â”€ Fitur: List Akun â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function listAccounts() {
     const index = loadIndex();
@@ -378,18 +471,18 @@ function listAccounts() {
     if (!index.accounts.length) { logWarn('Tidak ada akun.'); logBlank(); return; }
 
     console.log(`  ${'No'.padEnd(4)} ${'Status'.padEnd(11)} ${'Email'.padEnd(35)} Ditambahkan`);
-    logLine('─');
+    logLine('â”€');
     index.accounts.forEach((a, i) => {
         const cur   = a.id === index.current_account_id ? '* ' : '  ';
         const badge = statusBadge(a);
         console.log(`  ${cur}${String(i + 1).padStart(2)} ${badge} ${a.email.padEnd(35)} ${formatDate(a.created_at)}`);
     });
-    logLine('─');
+    logLine('â”€');
     console.log('  * = akun aktif saat ini');
     logBlank();
 }
 
-// ── Fitur: Hapus Akun ─────────────────────────────────────────────────────────
+// â”€â”€ Fitur: Hapus Akun â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function deleteAccount() {
     const index = loadIndex();
@@ -449,129 +542,7 @@ async function deleteAccount() {
     logBlank();
 }
 
-// ── Fitur: Lihat Quota ────────────────────────────────────────────────────────
-
-function quotaBar(fraction, width = 20) {
-    const filled = Math.round(fraction * width);
-    const empty  = width - filled;
-    const bar    = '█'.repeat(filled) + '░'.repeat(empty);
-    const pct    = Math.round(fraction * 100);
-    return `${bar} ${String(pct).padStart(3)}%`;
-}
-
-// Parse log AG Manager hari ini untuk cari akun yang kena 429 QuotaExhausted
-function parseQuotaExhaustedFromLog() {
-    const exhausted = new Map();
-    try {
-        const today = new Date().toISOString().slice(0, 10);
-        const logFile = path.join(AG_DIR, 'logs', `app.log.${today}`);
-        if (!fs.existsSync(logFile)) return exhausted;
-
-        const content = fs.readFileSync(logFile, 'utf-8');
-        const lines   = content.split('\n');
-
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i];
-
-            const tsMatch = line.match(/"quotaResetTimeStamp":\s*"([^"]+)"/);
-            const dlMatch = line.match(/"quotaResetDelay":\s*"([^"]+)"/);
-
-            if (tsMatch) {
-                const resetTs = new Date(tsMatch[1]);
-                let detectedAt = new Date();
-                let resetDelay = '';
-                for (let j = Math.max(0, i - 5); j <= i + 5; j++) {
-                    const tMatch = (lines[j] || '').match(/^(\d{4}-\d{2}-\d{2}T[\d:.]+[+-]\d{2}:\d{2})/);
-                    if (tMatch) { detectedAt = new Date(tMatch[1]); }
-                    const dMatch = (lines[j] || '').match(/"quotaResetDelay":\s*"([^"]+)"/);
-                    if (dMatch) { resetDelay = dMatch[1]; }
-                }
-
-                for (let j = Math.max(0, i - 10); j <= i + 10; j++) {
-                    const uuidMatch = (lines[j] || '').match(/rate_limit:.*?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
-                    if (uuidMatch) {
-                        const acctId = uuidMatch[1];
-                        const existing = exhausted.get(acctId);
-                        if (!existing || detectedAt > existing.detectedAt) {
-                            exhausted.set(acctId, { resetTimestamp: resetTs, resetDelay, detectedAt });
-                        }
-                        break;
-                    }
-                }
-            }
-        }
-    } catch (e) { /* silent */ }
-    return exhausted;
-}
-
-function showQuota() {
-    const index = loadIndex();
-    logBlank();
-    if (!index.accounts.length) { logWarn('Tidak ada akun.'); logBlank(); return; }
-
-    const agRunning = (() => {
-        try {
-            const { execSync } = require('child_process');
-            const out = execSync('tasklist /FI "IMAGENAME eq antigravity_tools.exe" /NH', { encoding: 'utf-8' });
-            return out.includes('antigravity_tools.exe');
-        } catch { return false; }
-    })();
-
-    if (!agRunning) {
-        logWarn('AG Manager tidak running. Data quota mungkin tidak up-to-date.');
-        logWarn('Buka AG Manager untuk auto-refresh quota setiap 15 menit.');
-    } else {
-        logInfo('AG Manager running. Data quota di-refresh otomatis setiap 15 menit.');
-    }
-    logBlank();
-
-    index.accounts.forEach((a, i) => {
-        if (a.disabled) return;
-        const accFile = loadAccountFile(a.id);
-        const isCurrent = a.id === index.current_account_id ? ' ← AKTIF' : '';
-        const cur = a.id === index.current_account_id ? '*' : ' ';
-
-        const lastUpdate = accFile?.quota?.last_updated;
-        const lastUpdateStr = lastUpdate ? formatDate(lastUpdate) : 'belum pernah';
-        const minsAgo = lastUpdate ? Math.round((Date.now() / 1000 - lastUpdate) / 60) : null;
-        const freshStr = minsAgo !== null ? ` (${minsAgo < 60 ? minsAgo + ' menit lalu' : Math.round(minsAgo/60) + ' jam lalu'})` : '';
-
-        console.log(`  ${cur} ${String(i + 1).padStart(2)}. ${a.email}${isCurrent}`);
-        console.log(`       Last update: ${lastUpdateStr}${freshStr}`);
-
-        if (!accFile?.quota?.quota_groups?.length) {
-            logWarn('     Data quota belum tersedia. Pastikan AG Manager sudah running.');
-            logBlank();
-            return;
-        }
-
-        const buckets = accFile.quota.quota_groups[0]?.buckets || [];
-        if (!buckets.length) { logWarn('     Tidak ada data bucket.'); logBlank(); return; }
-
-        const allFull = buckets.every(b => b.remaining_fraction >= 1.0);
-        if (allFull && minsAgo === null) {
-            logWarn('     Semua quota 100% — data ini mungkin belum di-refresh oleh AG Manager.');
-        }
-
-        logBlank();
-        buckets.forEach(b => {
-            const name  = b.display_name.padEnd(30);
-            const bar   = quotaBar(b.remaining_fraction);
-            const reset = b.description ? `  ${b.description}` : '';
-            console.log(`       ${name} ${bar}${reset}`);
-        });
-        logBlank();
-    });
-
-    if (agRunning) {
-        logInfo('Tip: Quota diperbarui otomatis oleh AG Manager saat ada activity.');
-    } else {
-        logWarn('Tip: Buka AG Manager lalu tunggu ~15 detik, lalu cek quota lagi.');
-    }
-    logBlank();
-}
-
-// ── Fitur: Validate Token ─────────────────────────────────────────────────────
+// â”€â”€ Fitur: Validate Token â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function validateToken(refresh_token) {
     return new Promise((resolve) => {
@@ -626,7 +597,7 @@ async function autoDeleteExpired() {
         process.stdout.write(`  [${String(i + 1).padStart(2)}/${index.accounts.length}] ${a.email.padEnd(40)} `);
 
         if (!rt) {
-            console.log('✘ no refresh_token → dihapus');
+            console.log('âœ˜ no refresh_token â†’ dihapus');
             idsToDelete.add(a.id);
             deletedEmails.push(a.email);
             deleted++;
@@ -636,13 +607,13 @@ async function autoDeleteExpired() {
         const result = await validateToken(rt);
 
         if (result.ok) {
-            console.log('✔ valid');
+            console.log('âœ” valid');
             valid++;
         } else if (result.error === 'network_error') {
             console.log('! network error, dilewati');
             errNet++;
         } else {
-            console.log(`✘ ${result.error || 'invalid'} → dihapus`);
+            console.log(`âœ˜ ${result.error || 'invalid'} â†’ dihapus`);
             idsToDelete.add(a.id);
             deletedEmails.push(a.email);
             deleted++;
@@ -660,13 +631,13 @@ async function autoDeleteExpired() {
 
     logBlank();
     logLine();
-    console.log(`  HASIL  ✔ ${valid} valid  |  ✘ ${deleted} dihapus  |  ! ${errNet} network error`);
+    console.log(`  HASIL  âœ” ${valid} valid  |  âœ˜ ${deleted} dihapus  |  ! ${errNet} network error`);
     logLine();
 
     if (deletedEmails.length) {
         logBlank();
         console.log('  Akun yang dihapus:');
-        deletedEmails.forEach(e => console.log(`    ✘ ${e}`));
+        deletedEmails.forEach(e => console.log(`    âœ˜ ${e}`));
     }
 
     logBlank();
@@ -674,7 +645,7 @@ async function autoDeleteExpired() {
     logBlank();
 }
 
-// ── Fitur: Auto Delete 429 ────────────────────────────────────────────────────
+// â”€â”€ Fitur: Auto Delete 429 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const AUTO429_STATE_FILE = path.join(__dirname, 'auto429.json');
 const PROXY_LOGS_DB      = path.join(AG_DIR, 'proxy_logs.db');
@@ -707,7 +678,7 @@ function deleteAccountById(id) {
     return acc.email;
 }
 
-// ── Fitur Baru: Auto Disable / Enable Proxy ───────────────────────────────────
+// â”€â”€ Fitur Baru: Auto Disable / Enable Proxy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const AUTO_DISABLE_PROXY_STATE_FILE = path.join(__dirname, 'autodisableproxy.json');
 let autoDisableProxyWatcher = null;
@@ -787,7 +758,7 @@ function enableAllProxies() {
             }
             
             count++;
-            console.log(`  ✔ ${a.email} → ACTIVE`);
+            console.log(`  âœ” ${a.email} â†’ ACTIVE`);
         }
     });
 
@@ -802,7 +773,7 @@ function enableAllProxies() {
     logBlank();
 }
 
-// ── Fitur Baru: Refresh All Accounts ───────────────────────────────────────────
+// â”€â”€ Fitur Baru: Refresh All Accounts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function refreshAllAccounts() {
     const index = loadIndex();
@@ -893,10 +864,10 @@ async function refreshAllAccounts() {
             const numStr = `[${String(res.indexNum).padStart(2)}/${index.accounts.length}]`;
             const emailStr = res.email.padEnd(40);
             if (res.status === 'sukses') {
-                console.log(`  ${numStr} ${emailStr} ✔ Sukses (${res.message})`);
+                console.log(`  ${numStr} ${emailStr} âœ” Sukses (${res.message})`);
                 sukses++;
             } else {
-                console.log(`  ${numStr} ${emailStr} ✘ Gagal (${res.message})`);
+                console.log(`  ${numStr} ${emailStr} âœ˜ Gagal (${res.message})`);
                 gagal++;
             }
         }
@@ -904,7 +875,7 @@ async function refreshAllAccounts() {
 
     logBlank();
     logLine();
-    console.log(`  SELESAI  ✔ ${sukses} berhasil di-refresh  |  ✘ ${gagal} gagal`);
+    console.log(`  SELESAI  âœ” ${sukses} berhasil di-refresh  |  âœ˜ ${gagal} gagal`);
     logLine();
     
     if (sukses > 0) {
@@ -912,18 +883,14 @@ async function refreshAllAccounts() {
         
         try {
             logInfo('Melakukan auto-refresh AG Manager di latar belakang...');
-            const pathInfo = require('path');
-            const fsInfo = require('fs');
-            const { execSync } = require('child_process');
             
             // 1. Matikan AG Tools (silent kill)
             try { execSync('taskkill /F /IM antigravity_tools.exe 2>nul', {stdio: 'ignore'}); } catch(e){}
             
             // 2. Buat launcher VBS di Temp untuk restart AG secara full stealth (tanpa pop up GUI sekejap pun)
-            const agExePath = pathInfo.join(process.env.LOCALAPPDATA, 'Antigravity Tools', 'antigravity_tools.exe');
-            if (fsInfo.existsSync(agExePath)) {
-                const vbsFile = pathInfo.join(process.env.TEMP, 'run_ag.vbs');
-                fsInfo.writeFileSync(vbsFile, `CreateObject("WScript.Shell").Run """${agExePath}""", 0, False`);
+            if (fs.existsSync(AG_MANAGER_EXE)) {
+                const vbsFile = path.join(process.env.TEMP || os.tmpdir(), 'run_ag.vbs');
+                fs.writeFileSync(vbsFile, `CreateObject("WScript.Shell").Run """${AG_MANAGER_EXE}""", 0, False`);
                 
                 // 3. Jalankan file VBS
                 execSync(`cscript //nologo "${vbsFile}"`, { windowsHide: true, stdio: 'ignore' });
@@ -939,7 +906,6 @@ async function refreshAllAccounts() {
 }
 
 function poll429FromDb(lastTs, modelFilter = '') {
-    const { execFileSync } = require('child_process');
     let condition = "status=429 AND timestamp>?";
     if (modelFilter) {
         condition += ` AND model LIKE '%${modelFilter}%'`;
@@ -971,7 +937,7 @@ function startAuto429Monitor() {
 
     auto429LastTs = 0;
 
-    logOk('[AUTO-DELETE 429] Monitor aktif — baca dari Traffic Logs DB, polling setiap 5 detik...');
+    logOk('[AUTO-DELETE 429] Monitor aktif â€” baca dari Traffic Logs DB, polling setiap 5 detik...');
 
     auto429Watcher = setInterval(() => {
         const rows = poll429FromDb(auto429LastTs);
@@ -991,12 +957,12 @@ function startAuto429Monitor() {
             auto429DeletedEmails.add(email);
 
             const timeStr = new Date(ts).toLocaleTimeString('id-ID', { hour12: false });
-            logWarn(`[AUTO-DELETE 429] ${email} kena 429 di Traffic Logs (${timeStr}) → menghapus...`);
+            logWarn(`[AUTO-DELETE 429] ${email} kena 429 di Traffic Logs (${timeStr}) â†’ menghapus...`);
 
             const deletedEmail = deleteAccountById(acc.id);
             if (deletedEmail) {
                 const remaining = loadIndex().accounts.filter(a => !a.disabled).length;
-                logOk(`[AUTO-DELETE 429] Akun ${deletedEmail} → dihapus. Sisa aktif: ${remaining}`);
+                logOk(`[AUTO-DELETE 429] Akun ${deletedEmail} â†’ dihapus. Sisa aktif: ${remaining}`);
             }
         }
     }, 5000);
@@ -1036,7 +1002,7 @@ function startAutoDisableProxyMonitor() {
     const state = getAutoDisableProxyState();
     const modelStr = state.model ? ` (Model filter: ${state.model})` : ' (Semua model)';
 
-    logOk(`[AUTO-DISABLE PROXY 429] Monitor aktif — baca dari Traffic Logs DB, polling setiap 5 detik...${modelStr}`);
+    logOk(`[AUTO-DISABLE PROXY 429] Monitor aktif â€” baca dari Traffic Logs DB, polling setiap 5 detik...${modelStr}`);
 
     autoDisableProxyWatcher = setInterval(() => {
         const rows = poll429FromDb(autoDisableProxyLastTs, state.model);
@@ -1056,12 +1022,12 @@ function startAutoDisableProxyMonitor() {
             autoDisableProxyDeletedEmails.add(email);
 
             const timeStr = new Date(ts).toLocaleTimeString('id-ID', { hour12: false });
-            logWarn(`[AUTO-DISABLE PROXY 429] ${email} kena 429 di Traffic Logs (${timeStr}) → disable proxy...`);
+            logWarn(`[AUTO-DISABLE PROXY 429] ${email} kena 429 di Traffic Logs (${timeStr}) â†’ disable proxy...`);
 
             const disabledEmail = disableProxyById(acc.id);
             if (disabledEmail) {
                 const remaining = loadIndex().accounts.filter(a => !a.disabled && !a.proxy_disabled).length;
-                logOk(`[AUTO-DISABLE PROXY 429] Akun ${disabledEmail} → PROXY OFF. Sisa aktif: ${remaining}`);
+                logOk(`[AUTO-DISABLE PROXY 429] Akun ${disabledEmail} â†’ PROXY OFF. Sisa aktif: ${remaining}`);
             }
         }
     }, 5000);
@@ -1100,46 +1066,7 @@ async function toggleAutoDisableProxy() {
     return newState;
 }
 
-// ── Auto Refresh AG Manager ───────────────────────────────────────────────────
-
-async function refreshAgManager() {
-    const { execSync, spawn } = require('child_process');
-    try {
-        execSync('taskkill /F /IM antigravity_tools.exe', { encoding: 'utf-8' });
-    } catch { /* sudah mati atau tidak bisa di-kill */ }
-
-    await delay(1500);
-
-    if (!fs.existsSync(AG_EXE)) {
-        logWarn('AG Manager exe tidak ditemukan, skip auto-refresh.');
-        return false;
-    }
-
-    // Jalankan AG Manager secara background (menyembunyikan jendela GUI aslinya via PowerShell)
-    try {
-        const { execSync } = require('child_process');
-        execSync(`powershell -Command "Start-Process -FilePath '${AG_EXE}' -WindowStyle Hidden"`, { windowsHide: true, stdio: 'ignore' });
-    } catch {
-        // Fallback jika powershell gagal
-        const child = spawn(AG_EXE, [], { 
-            detached: true, 
-            stdio: 'ignore',
-            windowsHide: true 
-        });
-        child.unref();
-    }
-
-    for (let i = 0; i < 10; i++) {
-        await delay(1000);
-        if (isAgRunning()) {
-            return true;
-        }
-    }
-    return false;
-}
-
 const GUI_CONFIG     = path.join(AG_DIR, 'gui_config.json');
-const AG_EXE         = path.join(process.env.LOCALAPPDATA, 'Antigravity Tools', 'antigravity_tools.exe');
 
 function loadGuiConfig() {
     try { return JSON.parse(fs.readFileSync(GUI_CONFIG, 'utf-8')); }
@@ -1152,7 +1079,6 @@ function saveGuiConfig(cfg) {
 
 function isAgRunning() {
     try {
-        const { execSync } = require('child_process');
         const out = execSync('tasklist', { encoding: 'utf-8' });
         return out.toLowerCase().includes('antigravity_tools.exe');
     } catch { return false; }
@@ -1177,20 +1103,15 @@ function ensureProxyConfig() {
 async function ensureAgRunning() {
     if (isAgRunning()) return 'already';
 
-    if (!fs.existsSync(AG_EXE)) {
-        logWarn(`AG Manager exe tidak ditemukan: ${AG_EXE}`);
+    if (!fs.existsSync(AG_MANAGER_EXE)) {
+        logWarn(`AG Manager exe tidak ditemukan: ${AG_MANAGER_EXE}`);
         return 'not_found';
     }
 
-    const { spawn } = require('child_process');
-    
-    // Setup VBScript Stealth Mode untuk force-hide aplikasi GUI nakal
-    const vbsPath = path.join(process.env.TEMP, 'run_ag.vbs');
-    const { execSync } = require('child_process');
-    const fs = require('fs');
+    const vbsPath = path.join(process.env.TEMP || os.tmpdir(), 'run_ag.vbs');
     
     // Tulis VB script ke sistem yang memaksa argumen rahasia "0" = Completely Hidden
-    fs.writeFileSync(vbsPath, `CreateObject("WScript.Shell").Run """${AG_EXE}""", 0, False`);
+    fs.writeFileSync(vbsPath, `CreateObject("WScript.Shell").Run """${AG_MANAGER_EXE}""", 0, False`);
 
     try {
         // Eksekusi Windows Script Host secara background
@@ -1207,8 +1128,6 @@ async function ensureAgRunning() {
 }
 
 async function autoStartServices() {
-    const { execSync } = require('child_process');
-
     const configChanged = ensureProxyConfig();
     const agStatus = await ensureAgRunning();
 
@@ -1242,17 +1161,17 @@ async function autoStartServices() {
     }
 }
 
-// ── Header & Menu ─────────────────────────────────────────────────────────────
+// â”€â”€ Header & Menu â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function printHeader() {
     console.log('');
-    console.log('       ██████╗  ██████╗  ██████╗████████╗██╗     ');
-    console.log('      ██╔══██╗██╔════╝ ██╔════╝╚══██╔══╝██║     ');
-    console.log('      ███████║██║  ███╗██║         ██║   ██║     ');
-    console.log('      ██╔══██║██║   ██║██║         ██║   ██║     ');
-    console.log('      ██║  ██║╚██████╔╝╚██████╗    ██║   ███████╗');
-    console.log('      ╚═╝  ╚═╝ ╚═════╝  ╚═════╝    ╚═╝   ╚══════╝');
-    console.log('               v1.0  —  by CROPz               ');
+    console.log('       â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ•—  â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ•—  â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ•—â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ•—â–ˆâ–ˆâ•—     ');
+    console.log('      â–ˆâ–ˆâ•”â•â•â–ˆâ–ˆâ•—â–ˆâ–ˆâ•”â•â•â•â•â• â–ˆâ–ˆâ•”â•â•â•â•â•â•šâ•â•â–ˆâ–ˆâ•”â•â•â•â–ˆâ–ˆâ•‘     ');
+    console.log('      â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ•‘â–ˆâ–ˆâ•‘  â–ˆâ–ˆâ–ˆâ•—â–ˆâ–ˆâ•‘         â–ˆâ–ˆâ•‘   â–ˆâ–ˆâ•‘     ');
+    console.log('      â–ˆâ–ˆâ•”â•â•â–ˆâ–ˆâ•‘â–ˆâ–ˆâ•‘   â–ˆâ–ˆâ•‘â–ˆâ–ˆâ•‘         â–ˆâ–ˆâ•‘   â–ˆâ–ˆâ•‘     ');
+    console.log('      â–ˆâ–ˆâ•‘  â–ˆâ–ˆâ•‘â•šâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ•”â•â•šâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ•—    â–ˆâ–ˆâ•‘   â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ•—');
+    console.log('      â•šâ•â•  â•šâ•â• â•šâ•â•â•â•â•â•  â•šâ•â•â•â•â•â•    â•šâ•â•   â•šâ•â•â•â•â•â•â•');
+    console.log('               v1.0  â€”  by CROPz               ');
 }
 
 async function main() {

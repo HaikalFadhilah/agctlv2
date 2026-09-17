@@ -28,17 +28,39 @@ Script ini mampu mengambil alih manajemen _headless_ secara keseluruhan tanpa me
 
 ## 🚀 Instalasi & Persiapan
 
-1. Pastikan Anda memiliki **Node.js** (v21+ disarankan) yang terinstal di komputer.
-2. Clone repository ini:
+Script ini **portabel** — bisa dijalankan di device mana pun (Windows/macOS/Linux) asalkan:
+- **Node.js v18+** terinstal
+- **Antigravity Tools** sudah terinstal di device tersebut (agar fitur refresh/restart otomatis & dudukannya bisa diakses)
+
+1. Clone repository ini:
    ```bash
    git clone https://github.com/HaikalFadhilah/agctlv2.git
    cd agctlv2
    ```
-3. Lakukan instalasi pada seluruh dependensinya:
+2. Instal dependensi (otomatis mengunduh Puppeteer + browser silumannya):
    ```bash
-   npm install puppeteer
+   npm install
    ```
-4. Buat file `akun.txt` tepat di direktori ini untuk injeksi massal (Format isi data biasanya adalah `email:password` atau `email|password` per-baris). 
+3. **Sesuaikan identitas device** (PENTING untuk device baru):
+   Salin `config.example.json` menjadi `config.json`, lalu isi path & identitas Antigravity Tools di device itu:
+   ```bash
+   copy config.example.json config.json   # Windows
+   cp config.example.json config.json     # Linux/macOS
+   ```
+   ```jsonc
+   {
+     "agDir": "C:\\Users\\NAMA_USER\\.antigravity_tools",      // folder data AG Tools
+     "agExe": "C:\\Users\\NAMA_USER\\AppData\\Local\\Antigravity Tools\\antigravity_tools.exe",
+     "deviceProfile": {
+       "machine_id": "auth0|user_xxx",                          // identitas dari AG Tools di device ini
+       "mac_machine_id": "xxxxxx",
+       "dev_device_id": "xxxxxx",
+       "sqm_id": "{XXXX}"
+     }
+   }
+   ```
+   > Semua field opsional. Kalau tidak dibuat `config.json`, dipakai default device asal (path `~/.antigravity_tools` + identitas bawaan).
+4. Buat file `akun.txt` tepat di direktori ini untuk injeksi massal (Format isi data biasanya adalah `email:password` atau `email|password` per-baris).
    *(Contoh isi `akun.txt`:)*
    ```text
    zoro123@email.com:rahasia123
