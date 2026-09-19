@@ -8,7 +8,13 @@ const readline = require('readline');
 const { execSync, execFileSync } = require('child_process');
 const { randomUUID } = require('crypto');
 
-// â”€â”€ Konstanta â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Paksa konsol Windows ke UTF-8 agar karakter box (█ ─ ● ✔) tampil benar,
+// bukan jadi mojibake (██) di cmd/PowerShell yang pakai codepage lama (CP437/1252).
+if (process.platform === 'win32' && process.stdout.isTTY) {
+    try { execSync('chcp 65001 >nul', { stdio: 'ignore', windowsHide: true }); } catch {}
+}
+
+// ── Konstanta ─────────────────────────────────────────────────────────────────
 
 const CLIENT_ID     = '1071' + '006' + '060' + '591' + '-tmh' + 'ssin' + '2h2' + '1lcr' + 'e23' + '5vtol' + 'ojh' + '4g40' + '3ep.a' + 'pps.go' + 'ogleuse' + 'rcon' + 'tent.c' + 'om';
 const CLIENT_SECRET = 'GOC' + 'SPX-' + 'K58' + 'FWR4' + '86L' + 'dLJ' + '1mLB' + '8sXC' + '4z6q' + 'DAf';
@@ -34,7 +40,7 @@ const DEVICE_PROFILE = {
 
 let AG_MANAGER_EXE = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Antigravity Tools', 'antigravity_tools.exe');
 
-// â”€â”€ Konfigurasi portabel (opsional config.json) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Konfigurasi portabel (opsional config.json) ────────────────────────────────
 // Supaya script bisa dijalankan di semua device, path & identitas device bisa
 // di-override lewat file config.json di folder proyek (lihat config.example.json).
 const CONFIG_FILE = path.join(__dirname, 'config.json');
@@ -52,24 +58,24 @@ if (CFG.deviceProfile && typeof CFG.deviceProfile === 'object') {
     DEVICE_PROFILE.sqm_id         = CFG.deviceProfile.sqm_id         || DEVICE_PROFILE.sqm_id;
 }
 
-// â”€â”€ Logging rapi â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Logging rapi ──────────────────────────────────────────────────────────────
 
 const LOG_WIDTH = 46;
 
-function logLine(char = 'â”€') { console.log('  ' + char.repeat(LOG_WIDTH)); }
+function logLine(char = '─') { console.log('  ' + char.repeat(LOG_WIDTH)); }
 
 function logStep(icon, msg) {
     const ts = new Date().toLocaleTimeString('id-ID', { hour12: false });
     console.log(`  ${icon} [${ts}] ${msg}`);
 }
 
-function logInfo(msg)    { logStep('â—†', msg); }
-function logOk(msg)      { logStep('âœ”', msg); }
+function logInfo(msg)    { logStep('◆', msg); }
+function logOk(msg)      { logStep('✔', msg); }
 function logWarn(msg)    { logStep('!', msg); }
-function logError(msg)   { logStep('âœ˜', msg); }
+function logError(msg)   { logStep('✘', msg); }
 function logBlank()      { console.log(''); }
 
-// â”€â”€ Helpers umum â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Helpers umum ──────────────────────────────────────────────────────────────
 
 const delay = (ms) => new Promise(r => setTimeout(r, ms));
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -87,7 +93,7 @@ function statusBadge(account) {
     return 'ACTIVE    ';
 }
 
-// â”€â”€ File helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── File helpers ──────────────────────────────────────────────────────────────
 
 function loadIndex() {
     if (!fs.existsSync(ACCOUNTS_INDEX))
@@ -105,9 +111,9 @@ function loadAccountFile(id) {
     return JSON.parse(fs.readFileSync(file, 'utf-8'));
 }
 
-// â”€â”€ OAuth helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── OAuth helpers ─────────────────────────────────────────────────────────────
 
-// Bind callback server SEKALI (port 0 = OS yg pilih) â†’ tanpa race-condition EADDRINUSE
+// Bind callback server SEKALI (port 0 = OS yg pilih) → tanpa race-condition EADDRINUSE
 // antar worker concurrent. Mengembalikan { port, callbackPromise }.
 function startCallbackServer() {
     const server = http.createServer((req, res) => {
@@ -131,7 +137,7 @@ function startCallbackServer() {
     });
 }
 
-// â”€â”€ Debug helpers (untuk menemukan akar masalah OAuth yang gagal) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Debug helpers (untuk menemukan akar masalah OAuth yang gagal) ──────────────
 
 const DEBUG_DIR = path.join(__dirname, 'debug');
 
@@ -153,16 +159,49 @@ async function captureFailedPage(page, label) {
 }
 
 // Klik tombol kata kunci via koordinat mouse CDP (trusted click, pasti diterima Google).
-// Tembus shadow DOM. Awalnya elemen diklik via el.click() (isTrusted=false) yang BISA diabaikan
-// Google; sekarang page.mouse.click() = input keyboard/mouse asli â†’ isTrusted=true.
-// Cakupan keyword termasuk halaman "nativeapp" (tombol "Login" / "Masuk") sebelum consent asli.
+// Tembus shadow DOM + scroll otomatis ke tombol kalau berada di bawah viewport
+// (halaman onboarding Google Workspace / ToS "speedbump" sering menaruh tombolnya di bawah lipatan).
+// Cakupan keyword: consent asli, halaman "nativeapp" (Login), dan halaman ToS/onboarding.
 async function clickConsentButton(page) {
     const KEYWORDS = ['lanjutkan', 'lanjut', 'continue', 'berikutnya', 'selanjutnya',
-                      'izinkan', 'allow', 'setuju', 'agree', 'memahami', 'understand',
-                      'konfirmasi', 'confirm', 'next', 'yes', 'login', 'masuk',
-                      'sign in', 'iya', 'ya', 'oke', 'ok'];
-    const target = await page.evaluate((kws) => {
-        function collect(root) {
+                      'izinkan', 'allow', 'setuju', 'setujui', 'agree', 'accept',
+                      'terima', 'menerima', 'memahami', 'understand', 'konfirmasi', 'confirm', 'next',
+                      'yes', 'login', 'masuk', 'sign in', 'iya', 'ya', 'oke', 'ok'];
+    const target = await page.evaluate(async (kws) => {
+        // 0) Cek dulu checkbox persetujuan ("saya mengerti/agree/understand") -- sering wajib
+        //    dicentang sebelum tombol lanjut aktif di halaman ToS Workspace.
+        async function tryCheckbox() {
+            const boxes = [];
+            const seen = new Set();
+            const scan = (root) => {
+                for (const el of root.querySelectorAll('input[type="checkbox"]')) {
+                    if (seen.has(el)) continue;
+                    seen.add(el);
+                    const label = el.closest('label');
+                    const text = (label ? (label.innerText || label.textContent || '') : '') + ' ' + (el.getAttribute('aria-label') || '');
+                    if (kws.some(k => text.toLowerCase().includes(k))) boxes.push(el);
+                }
+                for (const el of root.querySelectorAll('*')) {
+                    if (el.shadowRoot) scan(el.shadowRoot);
+                }
+            };
+            scan(document);
+            for (const box of boxes) {
+                const r = box.getBoundingClientRect();
+                if (r.width < 1 || r.height < 1) continue;
+                if (box.checked) continue;
+                try { box.scrollIntoView({ block: 'center', inline: 'center' }); } catch {}
+                await new Promise(res => requestAnimationFrame(() => requestAnimationFrame(res)));
+                const rr = box.getBoundingClientRect();
+                return { mode: 'checkbox', x: rr.left + rr.width / 2, y: rr.top + rr.height / 2, text: 'checkbox' };
+            }
+            return null;
+        }
+        const chk = await tryCheckbox();
+        if (chk) return chk;
+
+        // 1) Cari tombol lanjut/konsent
+        function findButton(root) {
             const matches = [];
             for (const el of root.querySelectorAll('button, input[type="button"], input[type="submit"], [role="button"], a[role="button"]')) {
                 const text = (el.innerText || el.textContent || el.value || el.getAttribute('aria-label') || '').trim();
@@ -170,19 +209,26 @@ async function clickConsentButton(page) {
                 const lower = text.toLowerCase();
                 if (kws.some(k => lower.includes(k))) {
                     const r = el.getBoundingClientRect();
-                    matches.push({ text, x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width, h: r.height });
+                    matches.push({
+                        el, text,
+                        vis: r.width > 1 && r.height > 1 && r.top >= 0 && r.bottom <= innerHeight,
+                        score: lower === 'login' || lower === 'masuk' ? 2 : (r.top >= 0 ? 1 : 0)
+                    });
                 }
             }
             for (const el of root.querySelectorAll('*')) {
-                if (el.shadowRoot) matches.push(...collect(el.shadowRoot));
+                if (el.shadowRoot) matches.push(...findButton(el.shadowRoot));
             }
             return matches;
         }
-        const all = collect(document);
-        // Prioritas: tombol pendek (exact label seperti "Login"/"Lanjutkan") di area tengah halaman.
-        all.sort((a, b) => (a.text.length - b.text.length));
-        const vis = all.filter(m => m.w > 1 && m.h > 1 && m.y >= 0 && m.y <= innerHeight);
-        return vis[0] || all[0] || null;
+        const c = findButton(document);
+        c.sort((a, b) => (b.vis - a.vis) || (a.text.length - b.text.length) || (b.score - a.score));
+        const pick = c[0];
+        if (!pick) return null;
+        try { pick.el.scrollIntoView({ block: 'center', inline: 'center' }); } catch {}
+        await new Promise(res => requestAnimationFrame(() => requestAnimationFrame(res)));
+        const r = pick.el.getBoundingClientRect();
+        return { mode: 'button', text: pick.text, x: r.left + r.width / 2, y: r.top + r.height / 2 };
     }, KEYWORDS);
 
     if (!target) return false;
@@ -256,7 +302,7 @@ function saveAccountToAG(accountData) {
     return id;
 }
 
-// â”€â”€ Fitur: Tambah Akun â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Fitur: Tambah Akun ────────────────────────────────────────────────────────
 
 async function addAccounts() {
     clear();
@@ -296,7 +342,7 @@ async function addAccounts() {
     }
     logInfo(`Menggunakan ${threads} concurrency worker...`);
     logBlank();
-    logLine('â”€');
+    logLine('─');
 
     // Set berisi baris yang sudah berhasil (akan dihapus dari file)
     const successLines = new Set();
@@ -319,14 +365,14 @@ async function addAccounts() {
         const logPrefix = `[${String(indexNum).padStart(2)}/${accounts.length}] ${account.email}`;
         
         if (!account.email || !account.password) {
-            console.log(`  ${logPrefix} âœ˜ Gagal: Format salah, dilewati.`);
+            console.log(`  ${logPrefix} ✘ Gagal: Format salah, dilewati.`);
             gagal++;
             return;
         }
 
         const idx = loadIndex();
         if (idx.accounts?.some(a => a.email === account.email)) {
-            console.log(`  ${logPrefix} âŠ˜ Dilewati: Sudah ada di AG Manager.`);
+            console.log(`  ${logPrefix} ⊘ Dilewati: Sudah ada di AG Manager.`);
             successLines.add(account.raw);
             skip++;
             return;
@@ -363,19 +409,19 @@ async function addAccounts() {
                 'accept-language': 'en-US,en;q=0.9'
             });
 
-            console.log(`  ${logPrefix} â—† Membuka Google...`);
+            console.log(`  ${logPrefix} ◆ Membuka Google...`);
             await page.goto(AUTH_URL, { waitUntil: 'networkidle2', timeout: 60000 });
 
             await page.waitForSelector('#identifierId', { visible: true, timeout: 30000 });
             await page.type('#identifierId', account.email, { delay: 0 });
             await page.keyboard.press('Enter');
-            console.log(`  ${logPrefix} â—† Input Email...`);
+            console.log(`  ${logPrefix} ◆ Input Email...`);
 
             await page.waitForSelector('input[name="Passwd"]', { visible: true, timeout: 30000 });
             await delay(100);
             await page.type('input[name="Passwd"]', account.password, { delay: 0 });
             await page.keyboard.press('Enter');
-            console.log(`  ${logPrefix} â—† Input Pass...`);
+            console.log(`  ${logPrefix} ◆ Input Pass...`);
 
             let redirected = false;
             for (let w = 0; w < 45; w++) {
@@ -404,7 +450,7 @@ async function addAccounts() {
                 throw new Error(`Timeout menunggu redirect OAuth${dbg ? `. Bukti disimpan di debug/ (URL: ${dbg.url})` : ''}`);
             }
 
-            console.log(`  ${logPrefix} â—† Menukar Kode OAuth...`);
+            console.log(`  ${logPrefix} ◆ Menukar Kode OAuth...`);
             const { code, redirectUri: actualUri } = await Promise.race([
                 callbackPromise,
                 new Promise((_, rej) => setTimeout(() => rej(new Error('Callback timeout')), 15000))
@@ -420,12 +466,12 @@ async function addAccounts() {
 
             saveAccountToAG({ email, name, access_token: tokens.access_token, refresh_token: tokens.refresh_token, expires_in: tokens.expires_in, id_token: tokens.id_token });
 
-            console.log(`  ${logPrefix} âœ” BERHASIL!`);
+            console.log(`  ${logPrefix} ✔ BERHASIL!`);
             successLines.add(account.raw);
             sukses++;
 
         } catch (err) {
-            console.log(`  ${logPrefix} âœ˜ GAGAL: ${err.message}`);
+            console.log(`  ${logPrefix} ✘ GAGAL: ${err.message}`);
             gagal++;
             try { await browser?.close(); } catch {}
         }
@@ -444,7 +490,7 @@ async function addAccounts() {
     }
 
     logLine();
-    console.log(`  SELESAI  âœ” ${sukses} berhasil  |  âœ˜ ${gagal} gagal  |  âŠ˜ ${skip} dilewati`);
+    console.log(`  SELESAI  ✔ ${sukses} berhasil  |  ✘ ${gagal} gagal  |  ⊘ ${skip} dilewati`);
     logLine();
 
     if (sukses > 0) {
@@ -463,7 +509,7 @@ async function addAccounts() {
     logBlank();
 }
 
-// â”€â”€ Fitur: List Akun â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Fitur: List Akun ──────────────────────────────────────────────────────────
 
 function listAccounts() {
     const index = loadIndex();
@@ -471,18 +517,18 @@ function listAccounts() {
     if (!index.accounts.length) { logWarn('Tidak ada akun.'); logBlank(); return; }
 
     console.log(`  ${'No'.padEnd(4)} ${'Status'.padEnd(11)} ${'Email'.padEnd(35)} Ditambahkan`);
-    logLine('â”€');
+    logLine('─');
     index.accounts.forEach((a, i) => {
         const cur   = a.id === index.current_account_id ? '* ' : '  ';
         const badge = statusBadge(a);
         console.log(`  ${cur}${String(i + 1).padStart(2)} ${badge} ${a.email.padEnd(35)} ${formatDate(a.created_at)}`);
     });
-    logLine('â”€');
+    logLine('─');
     console.log('  * = akun aktif saat ini');
     logBlank();
 }
 
-// â”€â”€ Fitur: Hapus Akun â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Fitur: Hapus Akun ─────────────────────────────────────────────────────────
 
 async function deleteAccount() {
     const index = loadIndex();
@@ -542,7 +588,7 @@ async function deleteAccount() {
     logBlank();
 }
 
-// â”€â”€ Fitur: Validate Token â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Fitur: Validate Token ─────────────────────────────────────────────────────
 
 async function validateToken(refresh_token) {
     return new Promise((resolve) => {
@@ -597,7 +643,7 @@ async function autoDeleteExpired() {
         process.stdout.write(`  [${String(i + 1).padStart(2)}/${index.accounts.length}] ${a.email.padEnd(40)} `);
 
         if (!rt) {
-            console.log('âœ˜ no refresh_token â†’ dihapus');
+            console.log('✘ no refresh_token → dihapus');
             idsToDelete.add(a.id);
             deletedEmails.push(a.email);
             deleted++;
@@ -607,13 +653,13 @@ async function autoDeleteExpired() {
         const result = await validateToken(rt);
 
         if (result.ok) {
-            console.log('âœ” valid');
+            console.log('✔ valid');
             valid++;
         } else if (result.error === 'network_error') {
             console.log('! network error, dilewati');
             errNet++;
         } else {
-            console.log(`âœ˜ ${result.error || 'invalid'} â†’ dihapus`);
+            console.log(`✘ ${result.error || 'invalid'} → dihapus`);
             idsToDelete.add(a.id);
             deletedEmails.push(a.email);
             deleted++;
@@ -631,13 +677,13 @@ async function autoDeleteExpired() {
 
     logBlank();
     logLine();
-    console.log(`  HASIL  âœ” ${valid} valid  |  âœ˜ ${deleted} dihapus  |  ! ${errNet} network error`);
+    console.log(`  HASIL  ✔ ${valid} valid  |  ✘ ${deleted} dihapus  |  ! ${errNet} network error`);
     logLine();
 
     if (deletedEmails.length) {
         logBlank();
         console.log('  Akun yang dihapus:');
-        deletedEmails.forEach(e => console.log(`    âœ˜ ${e}`));
+        deletedEmails.forEach(e => console.log(`    ✘ ${e}`));
     }
 
     logBlank();
@@ -645,7 +691,7 @@ async function autoDeleteExpired() {
     logBlank();
 }
 
-// â”€â”€ Fitur: Auto Delete 429 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Fitur: Auto Delete 429 ────────────────────────────────────────────────────
 
 const AUTO429_STATE_FILE = path.join(__dirname, 'auto429.json');
 const PROXY_LOGS_DB      = path.join(AG_DIR, 'proxy_logs.db');
@@ -678,7 +724,7 @@ function deleteAccountById(id) {
     return acc.email;
 }
 
-// â”€â”€ Fitur Baru: Auto Disable / Enable Proxy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Fitur Baru: Auto Disable / Enable Proxy ───────────────────────────────────
 
 const AUTO_DISABLE_PROXY_STATE_FILE = path.join(__dirname, 'autodisableproxy.json');
 let autoDisableProxyWatcher = null;
@@ -758,7 +804,7 @@ function enableAllProxies() {
             }
             
             count++;
-            console.log(`  âœ” ${a.email} â†’ ACTIVE`);
+            console.log(`  ✔ ${a.email} → ACTIVE`);
         }
     });
 
@@ -773,7 +819,7 @@ function enableAllProxies() {
     logBlank();
 }
 
-// â”€â”€ Fitur Baru: Refresh All Accounts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Fitur Baru: Refresh All Accounts ───────────────────────────────────────────
 
 async function refreshAllAccounts() {
     const index = loadIndex();
@@ -864,10 +910,10 @@ async function refreshAllAccounts() {
             const numStr = `[${String(res.indexNum).padStart(2)}/${index.accounts.length}]`;
             const emailStr = res.email.padEnd(40);
             if (res.status === 'sukses') {
-                console.log(`  ${numStr} ${emailStr} âœ” Sukses (${res.message})`);
+                console.log(`  ${numStr} ${emailStr} ✔ Sukses (${res.message})`);
                 sukses++;
             } else {
-                console.log(`  ${numStr} ${emailStr} âœ˜ Gagal (${res.message})`);
+                console.log(`  ${numStr} ${emailStr} ✘ Gagal (${res.message})`);
                 gagal++;
             }
         }
@@ -875,7 +921,7 @@ async function refreshAllAccounts() {
 
     logBlank();
     logLine();
-    console.log(`  SELESAI  âœ” ${sukses} berhasil di-refresh  |  âœ˜ ${gagal} gagal`);
+    console.log(`  SELESAI  ✔ ${sukses} berhasil di-refresh  |  ✘ ${gagal} gagal`);
     logLine();
     
     if (sukses > 0) {
@@ -937,7 +983,7 @@ function startAuto429Monitor() {
 
     auto429LastTs = 0;
 
-    logOk('[AUTO-DELETE 429] Monitor aktif â€” baca dari Traffic Logs DB, polling setiap 5 detik...');
+    logOk('[AUTO-DELETE 429] Monitor aktif — baca dari Traffic Logs DB, polling setiap 5 detik...');
 
     auto429Watcher = setInterval(() => {
         const rows = poll429FromDb(auto429LastTs);
@@ -957,12 +1003,12 @@ function startAuto429Monitor() {
             auto429DeletedEmails.add(email);
 
             const timeStr = new Date(ts).toLocaleTimeString('id-ID', { hour12: false });
-            logWarn(`[AUTO-DELETE 429] ${email} kena 429 di Traffic Logs (${timeStr}) â†’ menghapus...`);
+            logWarn(`[AUTO-DELETE 429] ${email} kena 429 di Traffic Logs (${timeStr}) → menghapus...`);
 
             const deletedEmail = deleteAccountById(acc.id);
             if (deletedEmail) {
                 const remaining = loadIndex().accounts.filter(a => !a.disabled).length;
-                logOk(`[AUTO-DELETE 429] Akun ${deletedEmail} â†’ dihapus. Sisa aktif: ${remaining}`);
+                logOk(`[AUTO-DELETE 429] Akun ${deletedEmail} → dihapus. Sisa aktif: ${remaining}`);
             }
         }
     }, 5000);
@@ -1002,7 +1048,7 @@ function startAutoDisableProxyMonitor() {
     const state = getAutoDisableProxyState();
     const modelStr = state.model ? ` (Model filter: ${state.model})` : ' (Semua model)';
 
-    logOk(`[AUTO-DISABLE PROXY 429] Monitor aktif â€” baca dari Traffic Logs DB, polling setiap 5 detik...${modelStr}`);
+    logOk(`[AUTO-DISABLE PROXY 429] Monitor aktif — baca dari Traffic Logs DB, polling setiap 5 detik...${modelStr}`);
 
     autoDisableProxyWatcher = setInterval(() => {
         const rows = poll429FromDb(autoDisableProxyLastTs, state.model);
@@ -1022,12 +1068,12 @@ function startAutoDisableProxyMonitor() {
             autoDisableProxyDeletedEmails.add(email);
 
             const timeStr = new Date(ts).toLocaleTimeString('id-ID', { hour12: false });
-            logWarn(`[AUTO-DISABLE PROXY 429] ${email} kena 429 di Traffic Logs (${timeStr}) â†’ disable proxy...`);
+            logWarn(`[AUTO-DISABLE PROXY 429] ${email} kena 429 di Traffic Logs (${timeStr}) → disable proxy...`);
 
             const disabledEmail = disableProxyById(acc.id);
             if (disabledEmail) {
                 const remaining = loadIndex().accounts.filter(a => !a.disabled && !a.proxy_disabled).length;
-                logOk(`[AUTO-DISABLE PROXY 429] Akun ${disabledEmail} â†’ PROXY OFF. Sisa aktif: ${remaining}`);
+                logOk(`[AUTO-DISABLE PROXY 429] Akun ${disabledEmail} → PROXY OFF. Sisa aktif: ${remaining}`);
             }
         }
     }, 5000);
@@ -1161,17 +1207,17 @@ async function autoStartServices() {
     }
 }
 
-// â”€â”€ Header & Menu â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Header & Menu ─────────────────────────────────────────────────────────────
 
 function printHeader() {
     console.log('');
-    console.log('       â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ•—  â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ•—  â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ•—â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ•—â–ˆâ–ˆâ•—     ');
-    console.log('      â–ˆâ–ˆâ•”â•â•â–ˆâ–ˆâ•—â–ˆâ–ˆâ•”â•â•â•â•â• â–ˆâ–ˆâ•”â•â•â•â•â•â•šâ•â•â–ˆâ–ˆâ•”â•â•â•â–ˆâ–ˆâ•‘     ');
-    console.log('      â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ•‘â–ˆâ–ˆâ•‘  â–ˆâ–ˆâ–ˆâ•—â–ˆâ–ˆâ•‘         â–ˆâ–ˆâ•‘   â–ˆâ–ˆâ•‘     ');
-    console.log('      â–ˆâ–ˆâ•”â•â•â–ˆâ–ˆâ•‘â–ˆâ–ˆâ•‘   â–ˆâ–ˆâ•‘â–ˆâ–ˆâ•‘         â–ˆâ–ˆâ•‘   â–ˆâ–ˆâ•‘     ');
-    console.log('      â–ˆâ–ˆâ•‘  â–ˆâ–ˆâ•‘â•šâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ•”â•â•šâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ•—    â–ˆâ–ˆâ•‘   â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ•—');
-    console.log('      â•šâ•â•  â•šâ•â• â•šâ•â•â•â•â•â•  â•šâ•â•â•â•â•â•    â•šâ•â•   â•šâ•â•â•â•â•â•â•');
-    console.log('               v1.0  â€”  by CROPz               ');
+    console.log('       ██████╗  ██████╗  ██████╗████████╗██╗     ');
+    console.log('      ██╔══██╗██╔════╝ ██╔════╝╚══██╔══╝██║     ');
+    console.log('      ███████║██║  ███╗██║         ██║   ██║     ');
+    console.log('      ██╔══██║██║   ██║██║         ██║   ██║     ');
+    console.log('      ██║  ██║╚██████╔╝╚██████╗    ██║   ███████╗');
+    console.log('      ╚═╝  ╚═╝ ╚═════╝  ╚═════╝    ╚═╝   ╚══════╝');
+    console.log('               v1.0  —  by CROPz               ');
 }
 
 async function main() {
