@@ -131,7 +131,11 @@ function startCallbackServer() {
 
     return new Promise((resolve, reject) => {
         server.on('error', reject);
-        server.listen(0, '127.0.0.1', () => {
+        // JANGAN bind '127.0.0.1' saja — Chrome/Edge resolve localhost ke ::1 (IPv6) DULU,
+        // koneksi IPv6 ditolak sedangkan URL bar tetap `localhost:port/...` → redirected=true
+        // tapi callback promise tak pernah resolve → "Callback timeout". Bind semua alamat
+        // (dual-stack :: → terima ::1 dan 127.0.0.1) supaya callback pasti masuk.
+        server.listen(0, () => {
             resolve({ port: server.address().port, callbackPromise });
         });
     });
@@ -201,29 +205,51 @@ async function clickConsentButton(page) {
         if (chk) return chk;
 
         // 1) Cari tombol lanjut/konsent
+        const PRIMARY_LABELS = ['login', 'masuk', 'sign in', 'next', 'continue', 'lanjut', 'lanjutkan', 'berikutnya', 'selanjutnya', 'agree', 'accept', 'ok', 'iya'];
         function findButton(root) {
             const matches = [];
             for (const el of root.querySelectorAll('button, input[type="button"], input[type="submit"], [role="button"], a[role="button"]')) {
                 const text = (el.innerText || el.textContent || el.value || el.getAttribute('aria-label') || '').trim();
                 if (!text) continue;
                 const lower = text.toLowerCase();
-                if (kws.some(k => lower.includes(k))) {
-                    const r = el.getBoundingClientRect();
-                    matches.push({
-                        el, text,
-                        vis: r.width > 1 && r.height > 1 && r.top >= 0 && r.bottom <= innerHeight,
-                        score: lower === 'login' || lower === 'masuk' ? 2 : (r.top >= 0 ? 1 : 0)
-                    });
-                }
+                const r = el.getBoundingClientRect();
+                const vis = r.width > 1 && r.height > 1 && r.top >= 0 && r.bottom <= innerHeight;
+                let score = 0;
+                const norm = lower.replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+                const exact = PRIMARY_LABELS.includes(norm);
+                if (norm === 'login' || norm === 'masuk' || norm === 'sign in') score = 8;   // tombol konfirmasi Login/OAuth
+                else if (norm === 'next' || norm === 'continue' || norm === 'lanjut' || norm === 'lanjutkan' ||
+                         norm === 'berikutnya' || norm === 'selanjutnya' || norm === 'agree' || norm === 'accept') score = 6;
+                else if (exact) score = 5;
+                else if (kws.some(k => lower.includes(k))) score = 2;        // label mengandung keyword
+                if (score === 0) continue;
+                matches.push({ el, text, vis, score });
             }
             for (const el of root.querySelectorAll('*')) {
                 if (el.shadowRoot) matches.push(...findButton(el.shadowRoot));
             }
             return matches;
         }
-        const c = findButton(document);
-        c.sort((a, b) => (b.vis - a.vis) || (a.text.length - b.text.length) || (b.score - a.score));
-        const pick = c[0];
+        let c = findButton(document);
+        c.sort((a, b) => (b.score - a.score) || (b.vis - a.vis) || (a.text.length - b.text.length));
+        let pick = c[0];
+
+        // 2) Fallback: kalau tidak ada tombol berkeyword tapi halaman ini halaman konfirmasi
+        //    OAuth/Login ("Sign in with Google ... to continue to ..."), klik tombol utama
+        //    Google Sign-In (#identifierNext / #signIn / tombol filled Material) apa adanya.
+        if (!pick) {
+            const bodyText = (document.body ? document.body.innerText : '').toLowerCase();
+            const isSignInPage = bodyText.includes('sign in with google') ||
+                                 bodyText.includes('to continue to google antigravity');
+            if (isSignInPage) {
+                const sel = '#identifierNext, #signIn, .VfPpkd-LgbsSe, button[jsname="V67aGc"], [data-id="google-button"]';
+                const el = document.querySelector(sel);
+                if (el && el.getBoundingClientRect().width > 1) {
+                    pick = { el, text: 'SignIn-primary', vis: true, score: 6 };
+                }
+            }
+        }
+
         if (!pick) return null;
         try { pick.el.scrollIntoView({ block: 'center', inline: 'center' }); } catch {}
         await new Promise(res => requestAnimationFrame(() => requestAnimationFrame(res)));
@@ -232,7 +258,25 @@ async function clickConsentButton(page) {
     }, KEYWORDS);
 
     if (!target) return false;
-    await page.mouse.click(target.x, target.y);
+    try {
+        await page.mouse.click(target.x, target.y);
+    } catch (e) {
+        // Kalau klik koordinat gagal (misal elemen tertutup overlay/animasi),
+        // fallback ke DOM .click() langsung — tombol Login/Next biasanya di doc root.
+        try {
+            await page.evaluate(() => {
+                const btns = [...document.querySelectorAll('button, [role="button"], a[role="button"], #identifierNext, #signIn')];
+                for (let i = btns.length - 1; i >= 0; i--) {
+                    const b = btns[i];
+                    const t = ((b.innerText || b.textContent || b.getAttribute('aria-label') || '') + '').toLowerCase();
+                    if (/login|masuk|sign ?in|next|continue|lanjut|berikutnya|izinkan|allow|setuju|agree/.test(t)) {
+                        b.click();
+                        return;
+                    }
+                }
+            });
+        } catch {}
+    }
     return true;
 }
 
@@ -380,6 +424,11 @@ async function addAccounts() {
 
         let browser;
         try {
+            // Stagger: jeda acak antar worker supaya beberapa browser tidak buka
+            // accounts.google.com pada waktu yang bersamaan (pemicu challenge Google).
+            const staggerMs = Math.floor(Math.random() * 2500) + ((indexNum - 1) % 5) * 800;
+            if (staggerMs > 0) await delay(staggerMs);
+
             const { port: callbackPort, callbackPromise } = await startCallbackServer(); // Bind sekali, tanpa race
             const redirectUri   = `http://localhost:${callbackPort}/oauth-callback`;
             const AUTH_URL      = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(SCOPES)}&access_type=offline&prompt=consent&include_granted_scopes=true&state=${randomUUID()}`;
@@ -391,8 +440,12 @@ async function addAccounts() {
                     '--no-sandbox',
                     '--disable-setuid-sandbox',
                     '--disable-blink-features=AutomationControlled',
-                    '--window-size=1280,800'
-                ]
+                    '--disable-features=IsolateOrigins,site-per-process',
+                    '--start-maximized',
+                    '--lang=en-US'
+                ],
+                defaultViewport: { width: 1366, height: 900 },
+                ignoreHTTPSErrors: true
             });
             const page = await browser.newPage();
 
@@ -404,7 +457,35 @@ async function addAccounts() {
                 window.chrome = { runtime: {} };
             });
             
-            await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
+            // User-Agent + Client-Hints override, KONSISTEN dengan versi bundel Chrome.
+            // Kenapa harus override: headless shell (headless:'shell') mengirim token
+            // `HeadlessChrome` di navigator.userAgent DAN di navigator.userAgentData.brands
+            // (client-hints). Google membaca client-hints, bukan cuma UA string →
+            // token HeadlessChrome = browser dianggap tak didukung →
+            // `myaccount.google.com/not-supported` SETELAH login (bukti debug 27 Sep).
+            // Override UA string saja TIDAK cukup (brands tetap bocor `HeadlessChrome`).
+            // Pakai setUserAgent(userAgent, userAgentMetadata) → keduanya konsisten versi 153
+            // (tidak mismatch seperti ISSUE 9 yang memicu challenge) TANPA token HeadlessChrome.
+            const CLEAN_BRANDS = [
+                { brand: 'Google Chrome', version: '153' },
+                { brand: 'Not)A;Brand',    version: '8'  },
+                { brand: 'Chromium',       version: '153' }
+            ];
+            const CLEAN_METADATA = {
+                brands: CLEAN_BRANDS,
+                fullVersionList: [
+                    { brand: 'Google Chrome', version: '153.0.8010.36' },
+                    { brand: 'Not)A;Brand',    version: '8.0.0.0' },
+                    { brand: 'Chromium',       version: '153.0.8010.36' }
+                ],
+                platform: 'Windows',
+                platformVersion: '10.0.22631.0',
+                architecture: 'x64',
+                model: '',
+                mobile: false
+            };
+            const CLEAN_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.36 Safari/537.36';
+            await page.setUserAgent(CLEAN_UA, CLEAN_METADATA);
             await page.setExtraHTTPHeaders({
                 'accept-language': 'en-US,en;q=0.9'
             });
@@ -417,16 +498,125 @@ async function addAccounts() {
             await page.keyboard.press('Enter');
             console.log(`  ${logPrefix} ◆ Input Email...`);
 
-            await page.waitForSelector('input[name="Passwd"]', { visible: true, timeout: 30000 });
-            await delay(100);
-            await page.type('input[name="Passwd"]', account.password, { delay: 0 });
-            await page.keyboard.press('Enter');
+            // Setelah submit email, Google kadang menaruh halaman PERANTARA sebelum field password
+            // (onboarding akun baru / ToS "speedbump" / verifikasi tambahan), terutama untuk domain
+            // Workspace yang baru dipakai. Loop ini: tunggu Passwd sambil klik tombol lanjut
+            // (continue/next/lanjut...), supaya halaman perantara bisa dilewati otomatis.
+            let passwordReady = false;
+            const waitBegin = Date.now();
+            let clickedOnce = false;
+            let lastClickTs = 0;
+            for (let w = 0; w < 60; w++) {
+                // Seluruh operasi DOM dibungkus try/catch: navigasi email→password sedang
+                // berlangsung akan membunuh execution context ("Execution context was
+                // destroyed...") — itu PAGI ignorable, lanjut iterasi berikutnya.
+                try {
+                    try {
+                        await page.waitForSelector('input[name="Passwd"]', { visible: true, timeout: 2000 });
+                        passwordReady = true;
+                        break;
+                    } catch {}
+
+                    const url = page.url();
+                    // URL sudah di halaman password, tapi pastikan input SUNGGAH render dulu
+                    // (race render → page.type error "No element found for selector"). Hanya
+                    // treat sebagai ready kalau elemen benar-benar ada.
+                    const passwdBox = await page.$('input[name="Passwd"]');
+                    if (url.includes('/signin/challenge/pwd') && passwdBox) {
+                        passwordReady = true;
+                        break;
+                    }
+                    if (passwdBox) { passwordReady = true; break; }
+
+                    const pgErr = await detectGoogleError(page);
+                    if (pgErr) {
+                        await captureFailedPage(page, account.email);
+                        throw new Error(`Google menghalangi saat tunggu password: ${pgErr.msg} (${pgErr.flag})`);
+                    }
+
+                    // JANGAN spam-klik — Google butuh waktu transisi & klik berulang justru
+                    // memicu challenge anti-bot (URL balik ke /identifier). Fakta empiris:
+                    //  - transisi email→password berjalan ~2-4 detik TANPA intervensi apa pun.
+                    //  - klik #identifierNext / konsent SELAMA transisi = re-submit email = challenge.
+                    //  - halaman intermediate (ToS/speedbump/onboarding) baru muncul SETELAH password.
+                    // Strategi: di fase tunggu password, JANGAN klik apa-apa.
+                    //   ~ Hanya jika >8 detik masih di identifier (email tidak ter-submit sama sekali)
+                    //     baru klik identifierNext SEKALI sebagai fallback.
+                    //   ~ Kalau sudah di halaman non-identifier tapi Passwd belum muncul (anomali),
+                    //     pakai clickConsentButton dengan cooldown 2500ms.
+                    const now = Date.now();
+                    const stillIdentifier = (await page.$('#identifierId')) !== null;
+                    if (!stillIdentifier) {
+                        if (now - lastClickTs > 2500) {
+                            lastClickTs = now;
+                            try { await clickConsentButton(page); } catch {}
+                        }
+                    } else if (now - waitBegin > 8000 && !clickedOnce) {
+                        clickedOnce = true;
+                        await page.evaluate(() => {
+                            const el = document.querySelector('#identifierNext, #next, button[jsname="V67aGc"], .VfPpkd-LgbsSe');
+                            if (el) el.click();
+                        });
+                    }
+                } catch {}
+                await delay(500);
+            }
+            if (!passwordReady) {
+                const dbg = await captureFailedPage(page, account.email);
+                throw new Error(`Halaman password tidak muncul setelah input email${dbg ? `. Bukti di debug/ (URL: ${dbg.url})` : ''}`);
+            }
+
+            // Ketik password robust: input Passwd bisa hilang/berganti cepat (flow Google
+            // bergerak, terutama setelah akun "warm"). Coba sampai 5x; kalau tetap tidak
+            // muncul, tangkap bukti + gagal eksplisit.
+            let passwordTyped = false;
+            for (let pt = 0; pt < 5 && !passwordTyped; pt++) {
+                try {
+                    await page.waitForSelector('input[name="Passwd"]:not([disabled])', { visible: true, timeout: 4000 });
+                    await page.type('input[name="Passwd"]', account.password, { delay: 0 });
+                    await page.keyboard.press('Enter');
+                    passwordTyped = true;
+                } catch {
+                    await delay(800);
+                }
+            }
+            if (!passwordTyped) {
+                const dbg = await captureFailedPage(page, account.email);
+                throw new Error(`Gagal mengetik password (input Passwd hilang)${dbg ? `. Bukti di debug/ (URL: ${dbg.url})` : ''}`);
+            }
             console.log(`  ${logPrefix} ◆ Input Pass...`);
 
             let redirected = false;
+            let retyped = false;
             for (let w = 0; w < 45; w++) {
                 try {
-                    if (page.url().includes(`localhost:${callbackPort}`)) { redirected = true; break; }
+                    // Redirect OAuth terdeteksi hanya jika URL BENAR-BENAR di callback
+                    // (host localhost/127.0.0.1/[::1] + port callback), bukan sekadar
+                    // substring — mencegah false-positive dari URL consent/error page.
+                    let u;
+                    try { u = new URL(page.url()); } catch { u = null; }
+                    const onCallback = !!u && u.port === String(callbackPort) &&
+                        ['localhost', '127.0.0.1', '[::1]', '::1'].includes(u.hostname);
+                    if (onCallback) { redirected = true; break; }
+
+                    // Setelah password, Google untuk PERANGKAT BARU/akan login sering
+                    // minta konfirmasi password ulang di `/v3/signin/challenge/pwd`
+                    // (title "Welcome"). Ketik ulang password SEKALI supaya lanjut ke consent.
+                    if (!retyped && (page.url().includes('/challenge/pwd') || (await page.$('input[name="Passwd"]')))) {
+                        try {
+                            await page.waitForSelector('input[name="Passwd"]:not([disabled])', { visible: true, timeout: 3000 });
+                            await page.click('input[name="Passwd"]');
+                            await page.keyboard.down('Control');
+                            await page.keyboard.press('KeyA');
+                            await page.keyboard.up('Control');
+                            await page.keyboard.press('Backspace');
+                            await page.type('input[name="Passwd"]', account.password, { delay: 0 });
+                            await page.keyboard.press('Enter');
+                            retyped = true;
+                            await delay(1500);
+                            continue;
+                        } catch {}
+                    }
 
                     // Cek dulu apakah Google menampilkan halaman masalah (bukan consent)
                     const gErr = await detectGoogleError(page);

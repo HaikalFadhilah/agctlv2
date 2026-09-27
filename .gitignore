@@ -4,3 +4,6 @@ akun.txt
 debug/
 auto429.json
 autodisableproxy.json
+manage.safe.js
+debug-diagnostic*.js
+test-e2e.js
