@@ -881,22 +881,30 @@ async function autoDeleteExpired() {
     logBlank();
 }
 
-// ── Fitur: Auto Delete 429 ────────────────────────────────────────────────────
+// ── Fitur: Auto Delete Quota Habis (Background Monitor) ──────────────────────
 
-const AUTO429_STATE_FILE = path.join(__dirname, 'auto429.json');
-const PROXY_LOGS_DB      = path.join(AG_DIR, 'proxy_logs.db');
+const AUTO_EXPIRED_STATE_FILE = path.join(__dirname, 'auto429.json'); // reuse file
+const PROXY_LOGS_DB           = path.join(AG_DIR, 'proxy_logs.db');
 
-let auto429Watcher    = null;
-let auto429DeletedEmails = new Set();
-let auto429LastTs     = 0;
+const AUTO_QUOTA_INTERVAL_MS = 30 * 1000; // poll tiap 30 detik
+const QUOTA_API_HOSTS = [
+    'daily-cloudcode-pa.sandbox.googleapis.com',
+    'daily-cloudcode-pa.googleapis.com',
+    'cloudcode-pa.googleapis.com'
+];
+const QUOTA_UA = 'vscode/1.96.0 (Antigravity/4.7.2)';
 
-function isAuto429On() {
-    try { return JSON.parse(fs.readFileSync(AUTO429_STATE_FILE, 'utf-8')).enabled === true; }
+let autoExpiredWatcher  = null;
+let autoExpiredRunning  = false; // guard overlap
+let autoExpiredDeleted  = new Set(); // email yang sudah dihapus cycle ini (reset saat stop)
+
+function isAutoExpiredOn() {
+    try { return JSON.parse(fs.readFileSync(AUTO_EXPIRED_STATE_FILE, 'utf-8')).enabled === true; }
     catch { return false; }
 }
 
-function setAuto429(enabled) {
-    fs.writeFileSync(AUTO429_STATE_FILE, JSON.stringify({ enabled }));
+function setAutoExpired(enabled) {
+    fs.writeFileSync(AUTO_EXPIRED_STATE_FILE, JSON.stringify({ enabled }));
 }
 
 function deleteAccountById(id) {
@@ -912,6 +920,151 @@ function deleteAccountById(id) {
         index.current_account_id = index.accounts[0]?.id || null;
     saveIndex(index);
     return acc.email;
+}
+
+// Refresh access token untuk 1 akun, return access_token atau null
+function refreshAccessToken(refresh_token) {
+    return new Promise((resolve) => {
+        const body = new URLSearchParams({
+            client_id: CLIENT_ID,
+            client_secret: CLIENT_SECRET,
+            refresh_token,
+            grant_type: 'refresh_token'
+        }).toString();
+        const req = https.request({
+            hostname: 'oauth2.googleapis.com',
+            path: '/token',
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(body) }
+        }, res => {
+            let data = '';
+            res.on('data', c => data += c);
+            res.on('end', () => {
+                try { const j = JSON.parse(data); resolve(j.access_token || null); }
+                catch { resolve(null); }
+            });
+        });
+        req.on('error', () => resolve(null));
+        req.write(body);
+        req.end();
+    });
+}
+
+// POST ke Google cloudcode API, coba 3 host fallback
+function quotaApiPost(accessToken, endpoint, bodyObj) {
+    return new Promise((resolve) => {
+        const jsonBody = JSON.stringify(bodyObj);
+        let hostIdx = 0;
+
+        function tryHost() {
+            if (hostIdx >= QUOTA_API_HOSTS.length) return resolve(null);
+            const host = QUOTA_API_HOSTS[hostIdx++];
+            const req = https.request({
+                hostname: host,
+                path: `/v1internal:${endpoint}`,
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'Content-Type': 'application/json',
+                    'User-Agent': QUOTA_UA,
+                    'Content-Length': Buffer.byteLength(jsonBody)
+                }
+            }, res => {
+                let data = '';
+                res.on('data', c => data += c);
+                res.on('end', () => {
+                    if (res.statusCode === 200) {
+                        try { resolve(JSON.parse(data)); } catch { resolve(null); }
+                    } else {
+                        tryHost(); // fallback ke host berikutnya
+                    }
+                });
+            });
+            req.on('error', () => tryHost());
+            req.write(jsonBody);
+            req.end();
+        }
+        tryHost();
+    });
+}
+
+// Cek kuota 1 akun via retrieveUserQuotaSummary, return { exhausted: bool, details: string } atau null (error/skip)
+async function checkAccountQuota(accFile) {
+    const rt = accFile?.token?.refresh_token;
+    if (!rt) return null;
+
+    // 1. Refresh access token
+    const accessToken = await refreshAccessToken(rt);
+    if (!accessToken) return null; // network error / token mati, skip
+
+    // 2. Dapetin project_id
+    const codeAssist = await quotaApiPost(accessToken, 'loadCodeAssist', { metadata: { ideType: 'ANTIGRAVITY' } });
+    const projectId = codeAssist?.cloudaicompanionProject;
+
+    // 3. Cek kuota per bucket group (persis kayak UI AG Tools)
+    const summary = await quotaApiPost(accessToken, 'retrieveUserQuotaSummary', projectId ? { project: projectId } : {});
+    if (!summary?.groups?.length) return null;
+
+    // 4. Cek tiap bucket — hapus kalau ada yang 0%
+    const exhaustedBuckets = [];
+    const allBuckets = [];
+    for (const g of summary.groups) {
+        for (const b of (g.buckets || [])) {
+            const frac = b.remainingFraction;
+            if (typeof frac !== 'number' || isNaN(frac)) continue;
+            const pct = Math.floor(frac * 100);
+            allBuckets.push(`${b.bucketId}=${pct}%`);
+            if (frac === 0) {
+                exhaustedBuckets.push(`${g.displayName} (${b.bucketId})`);
+            }
+        }
+    }
+
+    if (!allBuckets.length) return null;
+
+    if (exhaustedBuckets.length > 0) {
+        return { exhausted: true, details: exhaustedBuckets.join(', ') + ' → 0%' };
+    }
+
+    return { exhausted: false, details: allBuckets.join(', ') };
+}
+
+async function checkAndDeleteQuotaExhausted() {
+    if (autoExpiredRunning) return;
+    autoExpiredRunning = true;
+
+    try {
+        const index = loadIndex();
+        if (!index.accounts.length) { autoExpiredRunning = false; return; }
+
+        let deleted = 0;
+
+        for (const a of [...index.accounts]) {
+            if (autoExpiredDeleted.has(a.email)) continue; // sudah dihapus, skip
+
+            const accFile = loadAccountFile(a.id);
+            const result = await checkAccountQuota(accFile);
+
+            if (!result) continue; // error / nggak ada data, skip
+            if (!result.exhausted) continue; // masih ada kuota
+
+            logWarn(`[AUTO-DELETE QUOTA] ${a.email} → ${result.details} → menghapus...`);
+            const deletedEmail = deleteAccountById(a.id);
+            if (deletedEmail) {
+                autoExpiredDeleted.add(deletedEmail);
+                deleted++;
+            }
+        }
+
+        if (deleted > 0) {
+            const remaining = loadIndex().accounts.length;
+            logOk(`[AUTO-DELETE QUOTA] ${deleted} akun dihapus (kuota habis). Sisa aktif: ${remaining}`);
+        }
+    } catch (e) {
+        // jangan crash monitor
+    }
+
+    autoExpiredRunning = false;
 }
 
 // ── Fitur Baru: Auto Disable / Enable Proxy ───────────────────────────────────
@@ -1167,65 +1320,34 @@ except Exception as e:
     } catch { return []; }
 }
 
-// ==================== MONITOR 1: AUTO DELETE ====================
-function startAuto429Monitor() {
-    if (auto429Watcher) return;
+// ==================== MONITOR 1: AUTO DELETE KUOTA HABIS ====================
+function startAutoExpiredMonitor() {
+    if (autoExpiredWatcher) return;
 
-    auto429LastTs = 0;
+    logOk(`[AUTO-DELETE QUOTA] Monitor aktif — cek kuota Google API setiap ${AUTO_QUOTA_INTERVAL_MS / 1000} detik...`);
 
-    logOk('[AUTO-DELETE 429] Monitor aktif — baca dari Traffic Logs DB, polling setiap 5 detik...');
-
-    auto429Watcher = setInterval(() => {
-        const rows = poll429FromDb(auto429LastTs);
-        if (!rows.length) return;
-
-        auto429LastTs = Math.max(...rows.map(r => r[0]));
-
-        const index = loadIndex();
-
-        for (const [ts, email] of rows) {
-            if (!email) continue;
-            if (auto429DeletedEmails.has(email)) continue;
-
-            const acc = index.accounts.find(a => a.email === email);
-            if (!acc) continue;
-
-            auto429DeletedEmails.add(email);
-
-            const timeStr = new Date(ts).toLocaleTimeString('id-ID', { hour12: false });
-            logWarn(`[AUTO-DELETE 429] ${email} kena 429 di Traffic Logs (${timeStr}) → menghapus...`);
-
-            const deletedEmail = deleteAccountById(acc.id);
-            if (deletedEmail) {
-                const remaining = loadIndex().accounts.filter(a => !a.disabled).length;
-                logOk(`[AUTO-DELETE 429] Akun ${deletedEmail} → dihapus. Sisa aktif: ${remaining}`);
-            }
-        }
-    }, 5000);
+    // Jalankan sekali langsung, lalu interval
+    checkAndDeleteQuotaExhausted();
+    autoExpiredWatcher = setInterval(() => checkAndDeleteQuotaExhausted(), AUTO_QUOTA_INTERVAL_MS);
 }
 
-function stopAuto429Monitor() {
-    if (auto429Watcher) {
-        clearInterval(auto429Watcher);
-        auto429Watcher = null;
-        auto429LastTs  = 0;
-        auto429DeletedEmails.clear();
-        logWarn('[AUTO-DELETE 429] Monitor dihentikan.');
+function stopAutoExpiredMonitor() {
+    if (autoExpiredWatcher) {
+        clearInterval(autoExpiredWatcher);
+        autoExpiredWatcher = null;
+        autoExpiredDeleted.clear();
+        logWarn('[AUTO-DELETE QUOTA] Monitor dihentikan.');
     }
 }
 
-function toggleAuto429() {
-    if (isAutoDisableProxyOn()) {
-        logWarn("Matikan dulu 'Auto Disable Proxy' sebelum menyalakan ini.");
-        return false;
-    }
-    const current = isAuto429On();
+function toggleAutoExpired() {
+    const current = isAutoExpiredOn();
     const newState = !current;
-    setAuto429(newState);
+    setAutoExpired(newState);
     if (newState) {
-        startAuto429Monitor();
+        startAutoExpiredMonitor();
     } else {
-        stopAuto429Monitor();
+        stopAutoExpiredMonitor();
     }
     return newState;
 }
@@ -1280,7 +1402,7 @@ function stopAutoDisableProxyMonitor() {
 }
 
 async function toggleAutoDisableProxy() {
-    if (isAuto429On()) {
+    if (isAutoExpiredOn()) {
         logWarn("Matikan dulu 'Auto Delete 429' sebelum menyalakan ini.");
         return false;
     }
@@ -1412,8 +1534,8 @@ function printHeader() {
 
 async function main() {
     await autoStartServices();
-    if (isAuto429On()) {
-        startAuto429Monitor();
+    if (isAutoExpiredOn()) {
+        startAutoExpiredMonitor();
     }
     while (true) {
         clear();
@@ -1429,7 +1551,7 @@ async function main() {
         console.log(`  Akun: ${total} total  |  ${active} aktif  |  ${disabled} disabled`);
         logLine();
         logBlank();
-        const auto429Label = isAuto429On() ? 'AUTO DELETE 429                   [ON] ' : 'AUTO DELETE 429                   [OFF]';
+        const auto429Label = isAutoExpiredOn() ? 'AUTO DELETE QUOTA HABIS           [ON] ' : 'AUTO DELETE QUOTA HABIS           [OFF]';
         const autoDisableProxyState = getAutoDisableProxyState();
         let autoDisableProxyLabel = 'AUTO DISABLE PROXY 429            [OFF]';
         if (autoDisableProxyState.enabled) {
@@ -1454,7 +1576,7 @@ async function main() {
             case '2': clear(); printHeader(); logBlank(); logLine(); console.log('  DAFTAR AKUN'); logLine(); listAccounts(); await ask('  Tekan Enter untuk kembali...'); break;
             case '3': clear(); printHeader(); logBlank(); logLine(); console.log('  HAPUS AKUN'); logLine(); await deleteAccount(); await ask('  Tekan Enter untuk kembali...'); break;
             case '4': clear(); printHeader(); logBlank(); logLine(); console.log('  AUTO DELETE EXPIRED'); logLine(); await autoDeleteExpired(); await ask('  Tekan Enter untuk kembali...'); break;
-            case '5': { const on = toggleAuto429(); logBlank(); if(on !== false) logOk(`Auto Delete 429 sekarang: ${on ? 'ON' : 'OFF'}`); logBlank(); await ask('  Tekan Enter untuk kembali...'); break; }
+            case '5': { const on = toggleAutoExpired(); logBlank(); if(on !== false) logOk(`Auto Delete Quota Habis sekarang: ${on ? 'ON' : 'OFF'}`); logBlank(); await ask('  Tekan Enter untuk kembali...'); break; }
             case '6': clear(); printHeader(); logBlank(); logLine(); console.log('  AUTO ENABLE PROXY'); logLine(); enableAllProxies(); await ask('  Tekan Enter untuk kembali...'); break;
             case '7': { const on = await toggleAutoDisableProxy(); logBlank(); if(on !== false) logOk(`Auto Disable Proxy 429 sekarang: ${on ? 'ON' : 'OFF'}`); logBlank(); await ask('  Tekan Enter untuk kembali...'); break; }
             case '8': clear(); printHeader(); logBlank(); logLine(); console.log('  REFRESH ALL ACCOUNTS'); logLine(); await refreshAllAccounts(); await ask('  Tekan Enter untuk kembali...'); break;
