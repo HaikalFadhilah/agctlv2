@@ -38,7 +38,17 @@ const DEVICE_PROFILE = {
     sqm_id:         '{D18262FE-D3E8-47AC-B703-E0E45A3A20DA}'
 };
 
-let AG_MANAGER_EXE = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Antigravity Tools', 'antigravity_tools.exe');
+// Auto-detect nama exe: upstream memakai `antigravity-tools.exe` (dash),
+// tapi sebagian build lama `antigravity_tools.exe` (underscore). Cek keduanya.
+const AG_INSTALL_DIR = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Antigravity Tools');
+function detectAgExe() {
+    for (const n of ['antigravity-tools.exe', 'antigravity_tools.exe']) {
+        const p = path.join(AG_INSTALL_DIR, n);
+        if (fs.existsSync(p)) return p;
+    }
+    return path.join(AG_INSTALL_DIR, 'antigravity-tools.exe'); // default tebakan
+}
+let AG_MANAGER_EXE = detectAgExe();
 
 // ── Konfigurasi portabel (opsional config.json) ────────────────────────────────
 // Supaya script bisa dijalankan di semua device, path & identitas device bisa
@@ -344,6 +354,57 @@ function saveAccountToAG(accountData) {
     if (!index.current_account_id) index.current_account_id = id;
     saveIndex(index);
     return id;
+}
+
+// ── Verifikasi akses akun baru ke API cloudcode (deteksi 403 / not eligible) ──
+function verifyNewAccountAccess(accessToken) {
+    return new Promise((resolve) => {
+        const jb = JSON.stringify({ metadata: { ideType: 'ANTIGRAVITY' } });
+        const hosts = [
+            'daily-cloudcode-pa.sandbox.googleapis.com',
+            'daily-cloudcode-pa.googleapis.com',
+            'cloudcode-pa.googleapis.com'
+        ];
+        let hi = 0;
+        function tryHost() {
+            if (hi >= hosts.length) return resolve({ ok: false, status: 0, reason: 'semua host gagal konek' });
+            const host = hosts[hi++];
+            const req = https.request({
+                hostname: host, path: '/v1internal:loadCodeAssist', method: 'POST',
+                headers: {
+                    'Authorization': 'Bearer ' + accessToken,
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'vscode/1.96.0 (Antigravity/4.7.2)',
+                    'Content-Length': Buffer.byteLength(jb)
+                }
+            }, res => {
+                let d = '';
+                res.on('data', c => d += c);
+                res.on('end', () => {
+                    if (res.statusCode === 200) {
+                        try {
+                            const j = JSON.parse(d);
+                            resolve({ ok: true, status: 200, project: j.cloudaicompanionProject || null });
+                        } catch { resolve({ ok: true, status: 200 }); }
+                        return;
+                    }
+                    if (res.statusCode === 401 || res.statusCode === 403) {
+                        let reason = '';
+                        try {
+                            const j = JSON.parse(d);
+                            reason = j?.error?.details?.[0]?.reason || j?.error?.status || j?.error?.message || '';
+                        } catch { reason = d.substring(0, 120); }
+                        resolve({ ok: false, status: res.statusCode, reason, blocked: true });
+                        return;
+                    }
+                    tryHost();
+                });
+            });
+            req.on('error', () => tryHost());
+            req.write(jb); req.end();
+        }
+        tryHost();
+    });
 }
 
 // ── Fitur: Tambah Akun ────────────────────────────────────────────────────────
@@ -653,6 +714,19 @@ async function addAccounts() {
             const jwt        = decodeJWT(tokens.id_token || '');
             const email      = jwt.email || account.email;
             const name       = jwt.name  || email.split('@')[0];
+
+            // [VERIFY] Test langsung token ke API cloudcode SEBELUM simpan.
+            // Deteksi dini 403 / ACCOUNT_STATE_INVALID / not eligible.
+            const preflight = await verifyNewAccountAccess(tokens.access_token);
+            if (!preflight.ok) {
+                console.log(`  ${logPrefix} ⚠ PREFLIGHT GAGAL: ${preflight.reason} (HTTP ${preflight.status})`);
+                if (preflight.blocked) {
+                    await captureFailedPage(page, account.email).catch(() => {});
+                    throw new Error(`Akun tidak eligible: ${preflight.reason}`);
+                }
+            } else {
+                console.log(`  ${logPrefix} ◆ Preflight OK (project: ${preflight.project || '-'})`);
+            }
 
             saveAccountToAG({ email, name, access_token: tokens.access_token, refresh_token: tokens.refresh_token, expires_in: tokens.expires_in, id_token: tokens.id_token });
 
@@ -1273,8 +1347,10 @@ async function refreshAllAccounts() {
         try {
             logInfo('Melakukan auto-refresh AG Manager di latar belakang...');
             
-            // 1. Matikan AG Tools (silent kill)
-            try { execSync('taskkill /F /IM antigravity_tools.exe 2>nul', {stdio: 'ignore'}); } catch(e){}
+            // 1. Matikan AG Tools (silent kill) — coba kedua varian nama exe
+            for (const n of ['antigravity-tools.exe', 'antigravity_tools.exe']) {
+                try { execSync(`taskkill /F /IM ${n} 2>nul`, {stdio: 'ignore'}); } catch(e){}
+            }
             
             // 2. Buat launcher VBS di Temp untuk restart AG secara full stealth (tanpa pop up GUI sekejap pun)
             if (fs.existsSync(AG_MANAGER_EXE)) {
@@ -1437,8 +1513,8 @@ function saveGuiConfig(cfg) {
 
 function isAgRunning() {
     try {
-        const out = execSync('tasklist', { encoding: 'utf-8' });
-        return out.toLowerCase().includes('antigravity_tools.exe');
+        const out = execSync('tasklist', { encoding: 'utf-8' }).toLowerCase();
+        return out.includes('antigravity-tools.exe') || out.includes('antigravity_tools.exe');
     } catch { return false; }
 }
 
@@ -1504,9 +1580,9 @@ async function autoStartServices() {
         await delay(400);
     } else if (agStatus === 'already' && configChanged) {
         logInfo('Proxy config diupdate (enabled/auto_start). Merestart AG Manager...');
-        try {
-            execSync('taskkill /F /IM antigravity_tools.exe', { encoding: 'utf-8' });
-        } catch { /* mungkin sudah mati */ }
+        for (const n of ['antigravity-tools.exe', 'antigravity_tools.exe']) {
+            try { execSync(`taskkill /F /IM ${n}`, { encoding: 'utf-8' }); } catch { /* mungkin sudah mati */ }
+        }
         await delay(1000);
         const relaunch = await ensureAgRunning();
         if (relaunch === 'launched') {
