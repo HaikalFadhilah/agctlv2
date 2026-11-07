@@ -31,12 +31,59 @@ let AG_DIR        = path.join(process.env.USERPROFILE || os.homedir(), '.antigra
 let ACCOUNTS_DIR  = path.join(AG_DIR, 'accounts');
 let ACCOUNTS_INDEX = path.join(AG_DIR, 'accounts.json');
 
+// DEVICE_PROFILE dipakai sebagai FALLBACK/default (lihat config.json override).
+// Untuk akun BARU, device_profile di-generate unik per akun lewat generateDeviceProfile()
+// supaya Google tidak melihat ratusan akun berasal dari device fingerprint yang identik
+// (pola abuse paling gampang terdeteksi → TOS_VIOLATION ban).
 const DEVICE_PROFILE = {
     machine_id:     'auth0|user_kfwllyifh6pb38vn8roj1gormxlxmwmo',
     mac_machine_id: '4bfec3e4-a156-4315-b910-8e9b7bc783d6',
     dev_device_id:  '19bd8916-d262-4a48-ab09-d06bd8cb466d',
     sqm_id:         '{D18262FE-D3E8-47AC-B703-E0E45A3A20DA}'
 };
+
+// ── Generator device_profile unik per akun ────────────────────────────────────
+// Format mengikuti device_profile asli AG Tools:
+//   machine_id     : "auth0|user_" + 32 char base36-ish
+//   mac_machine_id : UUID v4
+//   dev_device_id  : UUID v4
+//   sqm_id         : "{UUID v4 UPPERCASE}"
+const CPS = 'abcdefghijklmnopqrstuvwxyz0123456789';
+
+function randHex(n) {
+    let s = '';
+    for (let i = 0; i < n; i++) s += Math.floor(Math.random() * 16).toString(16);
+    return s;
+}
+
+function randBase36(n) {
+    let s = '';
+    for (let i = 0; i < n; i++) s += CPS[Math.floor(Math.random() * CPS.length)];
+    return s;
+}
+
+function uuidV4() {
+    // RFC4122 v4 pakai crypto kalau tersedia, fallback ke Math.random
+    try {
+        const { randomUUID } = require('crypto');
+        return randomUUID();
+    } catch {
+        const h = randHex(32).split('');
+        h[12] = '4';
+        h[16] = '89ab'[Math.floor(Math.random() * 4)];
+        return `${h.slice(0,8).join('')}-${h.slice(8,12).join('')}-${h.slice(12,16).join('')}-${h.slice(16,20).join('')}-${h.slice(20).join('')}`;
+    }
+}
+
+function generateDeviceProfile() {
+    return {
+        machine_id:     `auth0|user_${randBase36(32)}`,
+        mac_machine_id: uuidV4(),
+        dev_device_id:  uuidV4(),
+        sqm_id:         `{${uuidV4().toUpperCase()}}`
+    };
+}
+
 
 // Auto-detect nama exe: upstream memakai `antigravity-tools.exe` (dash),
 // tapi sebagian build lama `antigravity_tools.exe` (underscore). Cek keduanya.
@@ -335,6 +382,15 @@ function saveAccountToAG(accountData) {
     if (!fs.existsSync(ACCOUNTS_DIR)) fs.mkdirSync(ACCOUNTS_DIR, { recursive: true });
     const id  = randomUUID();
     const now = Math.floor(Date.now() / 1000);
+
+    // device_profile UNIK per akun (anti-deteksi fingerprint identik).
+    // Kalau config.json menyetel deviceProfile eksplisit (CFG.deviceProfile), pakai itu
+    // supaya pengguna yang mau memaksa identitas device tertentu tetap bisa.
+    const profile = (CFG.deviceProfile && typeof CFG.deviceProfile === 'object' && CFG.deviceProfile.machine_id)
+        ? { machine_id: CFG.deviceProfile.machine_id, mac_machine_id: CFG.deviceProfile.mac_machine_id,
+            dev_device_id: CFG.deviceProfile.dev_device_id, sqm_id: CFG.deviceProfile.sqm_id }
+        : generateDeviceProfile();
+
     fs.writeFileSync(path.join(ACCOUNTS_DIR, `${id}.json`), JSON.stringify({
         id, email: accountData.email, name: accountData.name,
         token: {
@@ -343,8 +399,8 @@ function saveAccountToAG(accountData) {
             token_type: 'Bearer', email: accountData.email,
             oauth_client_key: 'antigravity_enterprise', is_gcp_tos: false, id_token: accountData.id_token
         },
-        device_profile: DEVICE_PROFILE,
-        device_history: [{ id: randomUUID(), created_at: now, label: 'auto_generated', profile: DEVICE_PROFILE, is_current: true }],
+        device_profile: profile,
+        device_history: [{ id: randomUUID(), created_at: now, label: 'auto_generated', profile, is_current: true }],
         disabled: false, proxy_disabled: false, validation_blocked: false, created_at: now, last_used: now
     }, null, 2));
 
@@ -356,21 +412,25 @@ function saveAccountToAG(accountData) {
     return id;
 }
 
-// ── Verifikasi akses akun baru ke API cloudcode (deteksi 403 / not eligible) ──
-function verifyNewAccountAccess(accessToken) {
+// ── Verifikasi akses akun baru ke API cloudcode (deteksi 403 / TOS ban) ──────
+// PENTING: `loadCodeAssist` SELALU 200 walau akun di-ban. Ban ToS hanya muncul
+// saat generate content (`generateContent` / `streamGenerateContent`) dengan
+// reason `TOS_VIOLATION`. Jadi wajib probe generate, bukan cuma loadCodeAssist.
+const CLOUDCODE_HOSTS = [
+    'daily-cloudcode-pa.sandbox.googleapis.com',
+    'daily-cloudcode-pa.googleapis.com',
+    'cloudcode-pa.googleapis.com'
+];
+
+function cloudcodePost(accessToken, endpoint, bodyObj) {
     return new Promise((resolve) => {
-        const jb = JSON.stringify({ metadata: { ideType: 'ANTIGRAVITY' } });
-        const hosts = [
-            'daily-cloudcode-pa.sandbox.googleapis.com',
-            'daily-cloudcode-pa.googleapis.com',
-            'cloudcode-pa.googleapis.com'
-        ];
+        const jb = JSON.stringify(bodyObj);
         let hi = 0;
         function tryHost() {
-            if (hi >= hosts.length) return resolve({ ok: false, status: 0, reason: 'semua host gagal konek' });
-            const host = hosts[hi++];
+            if (hi >= CLOUDCODE_HOSTS.length) return resolve({ status: 0, body: 'semua host gagal konek' });
+            const host = CLOUDCODE_HOSTS[hi++];
             const req = https.request({
-                hostname: host, path: '/v1internal:loadCodeAssist', method: 'POST',
+                hostname: host, path: '/v1internal:' + endpoint, method: 'POST',
                 headers: {
                     'Authorization': 'Bearer ' + accessToken,
                     'Content-Type': 'application/json',
@@ -381,29 +441,57 @@ function verifyNewAccountAccess(accessToken) {
                 let d = '';
                 res.on('data', c => d += c);
                 res.on('end', () => {
-                    if (res.statusCode === 200) {
-                        try {
-                            const j = JSON.parse(d);
-                            resolve({ ok: true, status: 200, project: j.cloudaicompanionProject || null });
-                        } catch { resolve({ ok: true, status: 200 }); }
-                        return;
-                    }
-                    if (res.statusCode === 401 || res.statusCode === 403) {
-                        let reason = '';
-                        try {
-                            const j = JSON.parse(d);
-                            reason = j?.error?.details?.[0]?.reason || j?.error?.status || j?.error?.message || '';
-                        } catch { reason = d.substring(0, 120); }
-                        resolve({ ok: false, status: res.statusCode, reason, blocked: true });
-                        return;
-                    }
-                    tryHost();
+                    if (res.statusCode === 200) return resolve({ status: 200, body: d });
+                    if (res.statusCode >= 400 && res.statusCode < 500) return resolve({ status: res.statusCode, body: d });
+                    tryHost(); // 5xx → host berikutnya
                 });
             });
             req.on('error', () => tryHost());
             req.write(jb); req.end();
         }
         tryHost();
+    });
+}
+
+function verifyNewAccountAccess(accessToken) {
+    return new Promise(async (resolve) => {
+        // 1. loadCodeAssist → project_id + tier
+        const ca = await cloudcodePost(accessToken, 'loadCodeAssist', { metadata: { ideType: 'ANTIGRAVITY' } });
+        if (ca.status !== 200) {
+            let reason = '';
+            try { const j = JSON.parse(ca.body); reason = j?.error?.details?.[0]?.reason || j?.error?.status || j?.error?.message || ''; }
+            catch { reason = String(ca.body).substring(0, 120); }
+            return resolve({ ok: false, status: ca.status, reason, blocked: true });
+        }
+        let project = null;
+        try { project = JSON.parse(ca.body).cloudaicompanionProject || null; } catch {}
+
+        // 2. generateContent → ini satu-satunya cara deteksi TOS_VIOLATION
+        const probe = { model: 'gemini-2.5-flash', project, request: { contents: [{ role: 'user', parts: [{ text: 'ping' }] }] } };
+        const gen = await cloudcodePost(accessToken, 'generateContent', probe);
+
+        if (gen.status === 200) {
+            return resolve({ ok: true, status: 200, project });
+        }
+
+        let reason = '';
+        let appeal = '';
+        try {
+            const j = JSON.parse(gen.body);
+            reason = j?.error?.details?.[0]?.reason || j?.error?.status || j?.error?.message || '';
+            appeal = j?.error?.details?.[0]?.metadata?.appeal_url || '';
+        } catch { reason = String(gen.body).substring(0, 120); }
+
+        // TOS ban = akun tidak bisa dipakai sama sekali (butuh appeal manual)
+        if (/TOS_VIOLATION|violation of Terms of Service/i.test(gen.body)) {
+            return resolve({ ok: false, status: gen.status, reason: 'TOS_VIOLATION (akun di-ban Google)', appeal, blocked: true, tosBan: true });
+        }
+        if (/SUBSCRIPTION_REQUIRED|not have a valid license/i.test(gen.body)) {
+            // Bukan ban — cuma tier terbatas. Akun masih bisa dipakai untuk model lain.
+            return resolve({ ok: true, status: gen.status, project, note: 'SUBSCRIPTION_REQUIRED (tier terbatas)' });
+        }
+        // 403/400 lain → anggap belum bisa dipakai
+        return resolve({ ok: false, status: gen.status, reason, blocked: true });
     });
 }
 
@@ -716,16 +804,23 @@ async function addAccounts() {
             const name       = jwt.name  || email.split('@')[0];
 
             // [VERIFY] Test langsung token ke API cloudcode SEBELUM simpan.
-            // Deteksi dini 403 / ACCOUNT_STATE_INVALID / not eligible.
+            // loadCodeAssist selalu 200 walau akun di-ban → wajib probe generateContent.
+            // Deteksi: TOS_VIOLATION, SUBSCRIPTION_REQUIRED, ACCOUNT_STATE_INVALID, 401/403.
             const preflight = await verifyNewAccountAccess(tokens.access_token);
             if (!preflight.ok) {
-                console.log(`  ${logPrefix} ⚠ PREFLIGHT GAGAL: ${preflight.reason} (HTTP ${preflight.status})`);
+                if (preflight.tosBan) {
+                    console.log(`  ${logPrefix} ✘ TOS BAN: akun di-disable Google karena pelanggaran ToS`);
+                    if (preflight.appeal) console.log(`  ${logPrefix}   Appeal: ${preflight.appeal}`);
+                    await captureFailedPage(page, account.email).catch(() => {});
+                    throw new Error(`TOS_VIOLATION — akun di-ban Google, tidak disimpan. Appeal: ${preflight.appeal || 'https://forms.gle/hGzM9MEUv2azZsrb9'}`);
+                }
+                console.log(`  ${logPrefix} ✘ PREFLIGHT GAGAL: ${preflight.reason} (HTTP ${preflight.status})`);
                 if (preflight.blocked) {
                     await captureFailedPage(page, account.email).catch(() => {});
                     throw new Error(`Akun tidak eligible: ${preflight.reason}`);
                 }
             } else {
-                console.log(`  ${logPrefix} ◆ Preflight OK (project: ${preflight.project || '-'})`);
+                console.log(`  ${logPrefix} ◆ Preflight OK (project: ${preflight.project || '-'})${preflight.note ? ' — ' + preflight.note : ''}`);
             }
 
             saveAccountToAG({ email, name, access_token: tokens.access_token, refresh_token: tokens.refresh_token, expires_in: tokens.expires_in, id_token: tokens.id_token });
@@ -884,6 +979,80 @@ async function validateToken(refresh_token) {
         req.write(body);
         req.end();
     });
+}
+
+// ── Fitur: Cek status TOS ban semua akun ──────────────────────────────────────
+// loadCodeAssist SELALU 200 walau akun di-ban → wajib probe generateContent.
+async function checkTosStatus() {
+    const index = loadIndex();
+    logBlank();
+    if (!index.accounts.length) { logWarn('Tidak ada akun.'); logBlank(); return; }
+
+    logInfo(`Mengecek ${index.accounts.length} akun (probe generateContent)...`);
+    logBlank();
+    logLine('─');
+
+    let ok = 0, tosBan = 0, dead = 0, other = 0;
+    const bannedList = [];
+
+    for (let i = 0; i < index.accounts.length; i++) {
+        const a = index.accounts[i];
+        const accFile = loadAccountFile(a.id);
+        const rt = accFile?.token?.refresh_token;
+        const tag = `[${String(i + 1).padStart(2)}/${index.accounts.length}]`;
+
+        if (!rt) {
+            console.log(`  ${tag} ⊘ TOKEN KOSONG      ${a.email}`);
+            other++;
+            continue;
+        }
+
+        // 1. Refresh access token
+        const tok = await refreshAccessToken(rt);
+        if (!tok) {
+            console.log(`  ${tag} ✘ TOKEN MATI        ${a.email}`);
+            dead++;
+            continue;
+        }
+
+        // 2. loadCodeAssist → project
+        const ca = await cloudcodePost(tok, 'loadCodeAssist', { metadata: { ideType: 'ANTIGRAVITY' } });
+        let project = null;
+        if (ca.status === 200) { try { project = JSON.parse(ca.body).cloudaicompanionProject || null; } catch {} }
+
+        // 3. generateContent → deteksi TOS ban
+        const gen = await cloudcodePost(tok, 'generateContent', {
+            model: 'gemini-2.5-flash', project,
+            request: { contents: [{ role: 'user', parts: [{ text: 'ping' }] }] }
+        });
+
+        if (gen.status === 200) {
+            console.log(`  ${tag} ✔ OK               ${a.email}`);
+            ok++;
+        } else if (/TOS_VIOLATION|violation of Terms of Service/i.test(gen.body)) {
+            console.log(`  ${tag} ✘ TOS BAN          ${a.email}`);
+            bannedList.push(a.email);
+            tosBan++;
+        } else {
+            let reason = '';
+            try { reason = JSON.parse(gen.body)?.error?.details?.[0]?.reason || ''; } catch {}
+            console.log(`  ${tag} ⚠ ${String(gen.status).padEnd(4)}             ${a.email}  ${reason}`);
+            other++;
+        }
+    }
+
+    logLine('─');
+    logBlank();
+    logOk(`Selesai — OK: ${ok}  |  TOS BAN: ${tosBan}  |  Token mati: ${dead}  |  Lain: ${other}`);
+
+    if (bannedList.length) {
+        logBlank();
+        logWarn('Akun kena TOS ban (tidak bisa generate, butuh appeal manual):');
+        bannedList.forEach(e => console.log(`    - ${e}`));
+        logBlank();
+        logInfo('Appeal: https://forms.gle/hGzM9MEUv2azZsrb9');
+    }
+    logBlank();
 }
 
 async function autoDeleteExpired() {
@@ -1642,6 +1811,7 @@ async function main() {
         console.log('  6.  AUTO ENABLE PROXY');
         console.log(`  7.  ${autoDisableProxyLabel}`);
         console.log('  8.  REFRESH ALL ACCOUNTS');
+        console.log('  9.  CEK STATUS AKUN (TOS BAN)');
         console.log('  0.  KELUAR');
         logBlank();
 
@@ -1656,6 +1826,7 @@ async function main() {
             case '6': clear(); printHeader(); logBlank(); logLine(); console.log('  AUTO ENABLE PROXY'); logLine(); enableAllProxies(); await ask('  Tekan Enter untuk kembali...'); break;
             case '7': { const on = await toggleAutoDisableProxy(); logBlank(); if(on !== false) logOk(`Auto Disable Proxy 429 sekarang: ${on ? 'ON' : 'OFF'}`); logBlank(); await ask('  Tekan Enter untuk kembali...'); break; }
             case '8': clear(); printHeader(); logBlank(); logLine(); console.log('  REFRESH ALL ACCOUNTS'); logLine(); await refreshAllAccounts(); await ask('  Tekan Enter untuk kembali...'); break;
+            case '9': clear(); printHeader(); logBlank(); logLine(); console.log('  CEK STATUS AKUN (TOS BAN)'); logLine(); await checkTosStatus(); await ask('  Tekan Enter untuk kembali...'); break;
             case '0': logBlank(); console.log('  Bye!'); logBlank(); rl.close(); process.exit(0); break;
             default:  logWarn('Pilihan tidak valid.'); await delay(200);
         }
